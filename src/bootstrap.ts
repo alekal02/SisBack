@@ -17,6 +17,7 @@ import { sincronizarKpisUniversaisBiblioteca } from './database/sincronizarKpisU
 import { iniciarAgendamentoWarmupExecutivo } from './services/executivoCacheWarmupService';
 import { recuperarMensagensWhatsappPendentes } from './services/WhatsappPlanilhaPipelineService';
 import wuzapiService from './services/WuzapiService';
+import { urlSemSegredoWebhook } from './services/wuzapiWebhookAuth';
 import { iniciarVigiaSessaoWhatsapp } from './services/WhatsappSessaoVigia';
 
 /** A sessão já conectada guarda a URL antiga. Sem isso o chatbot fica mudo depois do deploy. */
@@ -31,7 +32,7 @@ async function garantirWebhookWuzapi(): Promise<void> {
       wuzapiService.webhookUrl,
       ['Message', 'Connected', 'QR'],
     );
-    console.log(`[Wuzapi] Webhook da sessão: ${wuzapiService.webhookUrl}`);
+    console.log(`[Wuzapi] Webhook da sessão: ${urlSemSegredoWebhook(wuzapiService.webhookUrl)}`);
   } catch (err) {
     console.warn('[Wuzapi] Não foi possível renovar o webhook:', (err as Error)?.message || err);
   }

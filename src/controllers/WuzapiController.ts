@@ -16,8 +16,16 @@ import {
   assinaturaRecebida,
   segredoRecebidoWebhook,
   segredoWebhookConfere,
+  urlSemSegredoWebhook,
   webhookHmacDeveRecusar,
 } from '../services/wuzapiWebhookAuth';
+
+function sessaoSemSegredo<T extends { webhook?: string; Webhook?: string }>(sessao: T): T {
+  const copia = { ...sessao };
+  if (typeof copia.webhook === 'string') copia.webhook = urlSemSegredoWebhook(copia.webhook);
+  if (typeof copia.Webhook === 'string') copia.Webhook = urlSemSegredoWebhook(copia.Webhook);
+  return copia;
+}
 
 export class WuzapiController {
   /**
@@ -85,7 +93,7 @@ export class WuzapiController {
         url: process.env.WUZAPI_URL || null,
         tokenExiste: !!process.env.WUZAPI_TOKEN,
         webhookSecretExiste: !!process.env.WUZAPI_WEBHOOK_SECRET,
-        webhookUrl: wuzapiService.webhookUrl,
+        webhookUrl: urlSemSegredoWebhook(wuzapiService.webhookUrl),
       };
       if (!wuzapiService.isConfigured) {
         res.json({
@@ -115,7 +123,7 @@ export class WuzapiController {
         }
         res.json({
           ...base,
-          sessao,
+          sessao: sessaoSemSegredo(sessao),
           qrCode,
           conectado: sessao.connected,
           logado: sessao.loggedIn,

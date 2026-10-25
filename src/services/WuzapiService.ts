@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
+import { urlSemSegredoWebhook } from './wuzapiWebhookAuth';
 
 export interface WuzapiSessionStatus {
   connected?: boolean;
@@ -267,9 +268,11 @@ export class WuzapiService {
         gravado = '';
       }
       if (gravado && gravado !== url) {
-        console.warn(`[Wuzapi] Webhook gravado (${gravado}) difere do pedido (${url})`);
+        console.warn(
+          `[Wuzapi] Webhook gravado (${urlSemSegredoWebhook(gravado)}) difere do pedido (${urlSemSegredoWebhook(url)})`,
+        );
       } else {
-        console.log(`[Wuzapi] Webhook confirmado: ${gravado || url}`);
+        console.log(`[Wuzapi] Webhook confirmado: ${urlSemSegredoWebhook(gravado || url)}`);
       }
     } catch (error: unknown) {
       throw this.erroMsg('Falha ao configurar webhook', error);

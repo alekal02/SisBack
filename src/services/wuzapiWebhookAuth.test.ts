@@ -6,6 +6,7 @@ import {
   assinaturaRecebida,
   segredoRecebidoWebhook,
   segredoWebhookConfere,
+  urlSemSegredoWebhook,
   webhookAbertoEmProducao,
   webhookHmacDeveRecusar,
 } from './wuzapiWebhookAuth';
@@ -47,6 +48,16 @@ describe('webhook WuzAPI — segredo', () => {
       corpo,
       assinatura: '',
     }), true);
+  });
+
+  it('não devolve o segredo que vai na query da URL', () => {
+    const url = 'https://sistemma-api-va.onrender.com/api/wuzapi/webhook?secret=abc123&x=1';
+    assert.equal(
+      urlSemSegredoWebhook(url),
+      'https://sistemma-api-va.onrender.com/api/wuzapi/webhook?x=1',
+    );
+    assert.equal(urlSemSegredoWebhook('https://api.exemplo.com/api/wuzapi/webhook'), 'https://api.exemplo.com/api/wuzapi/webhook');
+    assert.equal(urlSemSegredoWebhook(''), '');
   });
 
   it('lê cabeçalho, bearer ou query sem exigir um formato só', () => {

@@ -50,6 +50,22 @@ export function webhookHmacDeveRecusar(opts: {
   return !assinaturaHmacConfere(opts.segredo, opts.corpo, opts.assinatura);
 }
 
+/** Tira `secret` da URL antes de log ou de resposta da API. */
+export function urlSemSegredoWebhook(url: string): string {
+  const texto = String(url || '').trim();
+  if (!texto) return '';
+  try {
+    const u = new URL(texto);
+    u.searchParams.delete('secret');
+    return u.toString();
+  } catch {
+    return texto
+      .replace(/([?&])secret=[^&]*/gi, '$1')
+      .replace(/[?&]$/, '')
+      .replace(/\?&/g, '?');
+  }
+}
+
 export function segredoRecebidoWebhook(headers: Record<string, unknown>, query: Record<string, unknown>): string {
   const header = headers['x-webhook-secret'];
   if (typeof header === 'string' && header) return header;

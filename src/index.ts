@@ -7,6 +7,7 @@ dotenv.config();
 import path from 'path';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import AppDataSource, { isMultiTenant } from './database/data-source';
 import { MAX_BODY_BYTES, limiteCorpoPorRota } from './config/limitesRecursos';
 import { receberCorpoWebhook } from './services/webhookCorpoStream';
@@ -14,6 +15,14 @@ import { iniciarAplicacao } from './bootstrap';
 
 const app: Express = express();
 const PORT = Number(process.env.PORT || process.env.APP_PORT || 3200);
+
+// A Render encaminha o cliente em X-Forwarded-For. Um salto só.
+app.set('trust proxy', 1);
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 
 // Middlewares globais
 const corsOrigins = (

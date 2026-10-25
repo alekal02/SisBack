@@ -197,13 +197,16 @@ export function authenticate(
   res: Response,
   next: NextFunction
 ): void {
-  // Suporta token via header Authorization ou query string ?token=
-  let token: string | null = extrairBearer(req);
-
-  // Fallback: token na query string (para download direto via window.open)
-  if (!token && req.query.token) {
-    token = req.query.token as string;
-  }
+  // Só Authorization: Bearer. As rotas de arquivo também usam o header
+  // (o front baixa o blob pelo axios, sem ?token=):
+  // GET /api/coleta/uploads/:id/export
+  // GET /api/coleta/uploads/:id/original
+  // GET /api/contracts/:contractId/servicos/:id/relatorio-dia-operacao
+  // POST /api/pdf/generate
+  // POST /api/dashboard/executivo/pdf
+  // POST /api/dashboard/generate-pdf
+  // POST /api/generate-pdf
+  const token = extrairBearer(req);
 
   if (!token) {
     res.status(401).json({ error: 'Token de autenticação não fornecido' });
