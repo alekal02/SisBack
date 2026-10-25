@@ -791,122 +791,6 @@ export class ColetaController {
       res.status(500).json({ error: error.message || 'Erro ao analisar planilha de roçada.' });
     }
   }
-
-  /**
-   * POST /api/coleta/upload/preview
-   * Analisa uma planilha sem importar — mostra o resumo de conflitos.
-   * 
-   * Body (multipart):
-   *   - planilha: arquivo .xlsx/.xls
-   *   - servico_id: string (opcional)
-   */
-  async previewUpload(req: RequestWithFile, res: Response): Promise<void> {
-    try {
-      const file = req.file;
-      if (!file) {
-        res.status(400).json({ error: 'Nenhum arquivo enviado.' });
-        return;
-      }
-
-      const ext = file.originalname.split('.').pop()?.toLowerCase();
-      if (ext !== 'xlsx' && ext !== 'xls' && ext !== 'xlsm') {
-        res.status(400).json({ error: 'Formato inválido. Envie um arquivo .xlsx, .xls ou .xlsm.' });
-        return;
-      }
-
-      const { servico_id } = req.body;
-
-      const analise = await DeduplicacaoService.analisarPlanilha(
-        file.buffer,
-        servico_id
-      );
-
-      // Amostra de conflitos (até 5) para exibição
-      const amostraConflitos = analise.conflitantes.slice(0, 5).map(c => ({
-        indice: c.indice,
-        chave: c.chave,
-        dadosPlanilha: {
-          dataSaida: c.dadosPlanilha.dataSaida,
-          placa: c.dadosPlanilha.placa,
-          turno: c.dadosPlanilha.turno,
-          motorista: c.dadosPlanilha.motorista,
-          regional: c.dadosPlanilha.regional,
-          pesoTotal: c.dadosPlanilha.pesoTotal,
-          kmTotal: c.dadosPlanilha.kmTotal,
-        },
-        dadosBanco: c.dadosBanco ? {
-          dataSaida: (c.dadosBanco as any).dataSaida,
-          placa: (c.dadosBanco as any).placa,
-          turno: (c.dadosBanco as any).turno,
-          motorista: (c.dadosBanco as any).motorista,
-          regional: (c.dadosBanco as any).regional,
-          pesoTotal: (c.dadosBanco as any).pesoTotal,
-          kmTotal: (c.dadosBanco as any).kmTotal,
-        } : null,
-        diferencas: c.diferencas,
-      }));
-
-      const agente = await conferirAgenteUpload(file.buffer, file.originalname, servico_id);
-
-      res.json({
-        sucesso: true,
-        totalLinhas: analise.totalLinhas,
-        novos: analise.novos.length,
-        duplicados: analise.duplicados.length,
-        conflitantes: analise.conflitantes.length,
-        temConflitos: analise.conflitantes.length > 0,
-        amostraConflitos,
-        chaveUsada: analise.chaveUsada,
-        arquivo: file.originalname,
-        agente,
-      });
-    } catch (error: any) {
-      console.error('Erro ao analisar planilha:', error);
-      res.status(500).json({ error: error.message || 'Erro ao analisar planilha.' });
-    }
-  }
-
-  /**
-   * POST /api/coleta/upload/preview-data
-   * Analisa uma planilha agrupando por DATA — mostra quantas datas
-   * já existem no banco e quantas são novas.
-   * 
-   * Body (multipart):
-   *   - planilha: arquivo .xlsx/.xls
-   *   - servico_id: string (opcional)
-   */
-  async previewUploadData(req: RequestWithFile, res: Response): Promise<void> {
-    try {
-      const file = req.file;
-      if (!file) {
-        res.status(400).json({ error: 'Nenhum arquivo enviado.' });
-        return;
-      }
-
-      const ext = file.originalname.split('.').pop()?.toLowerCase();
-      if (ext !== 'xlsx' && ext !== 'xls') {
-        res.status(400).json({ error: 'Formato inválido. Envie um arquivo .xlsx ou .xls.' });
-        return;
-      }
-
-      const { servico_id } = req.body;
-
-      const analise = await DeduplicacaoService.analisarPlanilhaPorData(
-        file.buffer,
-        servico_id
-      );
-
-      res.json({
-        sucesso: true,
-        ...analise,
-        arquivo: file.originalname,
-      });
-    } catch (error: any) {
-      console.error('Erro ao analisar planilha por data:', error);
-      res.status(500).json({ error: error.message || 'Erro ao analisar planilha.' });
-    }
-  }
-
   /**
    * POST /api/coleta/upload/conferencia-diaria
    * Compara planilha vs sistema por dia (rotas, viagens, peso, km).
@@ -948,36 +832,6 @@ export class ColetaController {
       res.status(500).json({ error: error.message || 'Erro na conferência diária.' });
     }
   }
-
-  /**
-   * POST /api/coleta/upload/agente-conferencia
-   * Analisa rotas, retrabalho da sala técnica e cruzamento com o que já está no sistema.
-   */
-  async agenteConferencia(req: RequestWithFile, res: Response): Promise<void> {
-    try {
-      const file = req.file;
-      if (!file) {
-        res.status(400).json({ error: 'Nenhum arquivo enviado.' });
-        return;
-      }
-      const ext = file.originalname.split('.').pop()?.toLowerCase();
-      if (ext !== 'xlsx' && ext !== 'xls' && ext !== 'xlsm') {
-        res.status(400).json({ error: 'Formato inválido. Envie um arquivo .xlsx, .xls ou .xlsm.' });
-        return;
-      }
-      const servicoId = String(req.body?.servico_id || '').trim() || undefined;
-      const agente = await conferirAgenteUpload(file.buffer, file.originalname, servicoId);
-      if (!agente) {
-        res.status(500).json({ error: 'Não foi possível analisar a planilha.' });
-        return;
-      }
-      res.json({ sucesso: true, arquivo: file.originalname, ...agente });
-    } catch (error: any) {
-      console.error('Erro no agente de conferência:', error);
-      res.status(500).json({ error: error.message || 'Erro no agente de conferência.' });
-    }
-  }
-
   /**
    * GET /api/coleta/dashboard
    * Retorna dados agregados para o dashboard
@@ -1085,30 +939,6 @@ export class ColetaController {
       res.status(status).json({ error: error.message || 'Erro ao listar uploads do dia.' });
     }
   }
-
-  /**
-   * GET /api/coleta/uploads/:id/export
-   * Exporta os dados de um upload como planilha XLSX
-   */
-  async exportarUpload(req: Request, res: Response): Promise<void> {
-    try {
-      const id = parseInt(String(req.params.id));
-      if (isNaN(id)) {
-        res.status(400).json({ error: 'ID inválido.' });
-        return;
-      }
-
-      const { buffer, nomeArquivo } = await PlanilhaService.exportarPlanilha(id);
-
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
-      res.send(buffer);
-    } catch (error: any) {
-      console.error('Erro ao exportar planilha:', error);
-      res.status(500).json({ error: error.message || 'Erro ao exportar planilha.' });
-    }
-  }
-
   /**
    * GET /api/coleta/uploads/:id/original
    * Devolve o arquivo guardado (disco, MinIO ou arquivos_storage).

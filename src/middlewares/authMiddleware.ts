@@ -199,7 +199,6 @@ export function authenticate(
 ): void {
   // Só Authorization: Bearer. As rotas de arquivo também usam o header
   // (o front baixa o blob pelo axios, sem ?token=):
-  // GET /api/coleta/uploads/:id/export
   // GET /api/coleta/uploads/:id/original
   // GET /api/contracts/:contractId/servicos/:id/relatorio-dia-operacao
   // POST /api/pdf/generate
