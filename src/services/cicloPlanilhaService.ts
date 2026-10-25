@@ -606,12 +606,30 @@ async function salvarUltimaPlanilhaNaPastaBackup(opts: {
       buffer = exp.buffer;
     }
 
-    await garantirPastaBackup(destino.pastaAbs);
-    const caminhoFinal = path.join(destino.pastaAbs, nomeDestino);
-    await fs.writeFile(caminhoFinal, buffer);
-    const caminhoHost = path.join(destino.caminhoHost, nomeDestino);
+    const noBanco = String(process.env.STORAGE_DRIVER || '').trim().toLowerCase() === 'postgres';
+    let caminhoHost = '';
+    if (noBanco) {
+      const slug = path.basename(destino.pastaAbs);
+      const objeto = `planilhas-ciclo/${slug}/${nomeDestino}`;
+      caminhoHost = await FileStorageService.uploadEmPath(
+        objeto,
+        buffer,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        nomeDestino,
+      );
+    }
 
-    console.log(`[cicloPlanilha] Backup da planilha salvo: ${caminhoFinal} → ${caminhoHost} (upload ${ultimo.id})`);
+    try {
+      await garantirPastaBackup(destino.pastaAbs);
+      const caminhoFinal = path.join(destino.pastaAbs, nomeDestino);
+      await fs.writeFile(caminhoFinal, buffer);
+      caminhoHost = path.join(destino.caminhoHost, nomeDestino);
+      console.log(`[cicloPlanilha] Backup da planilha salvo: ${caminhoFinal} → ${caminhoHost} (upload ${ultimo.id})`);
+    } catch (errDisco) {
+      if (!noBanco) throw errDisco;
+      console.warn('[cicloPlanilha] Disco do backup indisponível; a cópia ficou em arquivos_storage:', errDisco);
+    }
+
     return { ok: true, caminho: caminhoHost, caminhoHost, uploadId: ultimo.id };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

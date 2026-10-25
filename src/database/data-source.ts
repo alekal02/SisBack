@@ -38,6 +38,7 @@ function configLog() {
   return { logging: ['error'] as 'error'[] };
 }
 
+/** DATABASE_SSL=true (ou ausente, com DATABASE_URL) liga SSL sem validar a CA. Só 'false' desliga. */
 function sslDaUrl(): { rejectUnauthorized: false } | undefined {
   if (!process.env.DATABASE_URL) return undefined;
   if (process.env.DATABASE_SSL === 'false') return undefined;

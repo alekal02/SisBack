@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import AppDataSource from '../database/data-source';
 
 const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
 
@@ -51,20 +52,34 @@ function caminhoLocalSeguro(objectPath: string): string {
 }
 
 /**
- * Armazena arquivos no MinIO/S3 quando MINIO_ENDPOINT existe.
- * Sem endpoint, grava em disco local (pasta uploads), com aviso no log.
+ * STORAGE_DRIVER=postgres grava em arquivos_storage.
+ * Com MINIO_ENDPOINT, usa MinIO/S3. Sem os dois, grava em disco (uploads/).
+ * O cache do dashboard não passa por aqui.
  */
 class FileStorageService {
   private client: Minio.Client | null = null;
   private bucket: string;
   private publicUrl: string;
   private local: boolean;
+  private postgres: boolean;
   private region: string;
 
   constructor() {
+    const driver = String(process.env.STORAGE_DRIVER || '').trim().toLowerCase();
     const endPoint = String(process.env.MINIO_ENDPOINT || '').trim();
     this.region = process.env.MINIO_REGION || 'us-east-1';
     this.bucket = process.env.MINIO_BUCKET || 'abastecimentos';
+
+    if (driver === 'postgres') {
+      this.postgres = true;
+      this.local = false;
+      this.publicUrl = '';
+      this.client = null;
+      console.log('[FileStorage] STORAGE_DRIVER=postgres. Arquivos vão para a tabela arquivos_storage.');
+      return;
+    }
+
+    this.postgres = false;
 
     if (!endPoint) {
       this.local = true;
@@ -130,6 +145,30 @@ class FileStorageService {
     return base ? `${base}${rel}` : rel;
   }
 
+  private async gravarPostgres(objectPath: string, buffer: Buffer, mimeType: string): Promise<string> {
+    const pathNorm = normalizarObjectPath(objectPath);
+    await AppDataSource.query(
+      `INSERT INTO arquivos_storage (id, caminho, content_type, tamanho, conteudo)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (caminho) DO UPDATE
+         SET content_type = EXCLUDED.content_type,
+             tamanho = EXCLUDED.tamanho,
+             conteudo = EXCLUDED.conteudo`,
+      [uuidv4(), pathNorm, mimeType || 'application/octet-stream', buffer.length, buffer],
+    );
+    return `db://arquivos/${pathNorm}`;
+  }
+
+  private async lerPostgres(objectPath: string): Promise<Buffer> {
+    const rows = await AppDataSource.query(
+      'SELECT conteudo FROM arquivos_storage WHERE caminho = $1',
+      [objectPath],
+    );
+    const conteudo = rows[0]?.conteudo;
+    if (!conteudo) throw new Error('Arquivo não encontrado');
+    return Buffer.isBuffer(conteudo) ? conteudo : Buffer.from(conteudo);
+  }
+
   private async gravarLocal(objectPath: string, buffer: Buffer): Promise<string> {
     const abs = caminhoLocalSeguro(objectPath);
     await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -168,6 +207,7 @@ class FileStorageService {
     const filename = `abastecimentos/${uuidv4()}.${ext}`;
     const buffer = Buffer.from(base64Data, 'base64');
 
+    if (this.postgres) return this.gravarPostgres(filename, buffer, mimeType);
     if (this.local) return this.gravarLocal(filename, buffer);
 
     await this.client!.putObject(this.bucket, filename, buffer, buffer.length, {
@@ -189,6 +229,7 @@ class FileStorageService {
     nomeDownload?: string,
   ): Promise<string> {
     const pathNorm = normalizarObjectPath(objectPath);
+    if (this.postgres) return this.gravarPostgres(pathNorm, buffer, mimeType);
     if (this.local) return this.gravarLocal(pathNorm, buffer);
 
     await this.client!.putObject(this.bucket, pathNorm, buffer, buffer.length, {
@@ -202,6 +243,11 @@ class FileStorageService {
   async downloadArquivo(url: string): Promise<Buffer> {
     const local = this.caminhoDeUrlLocal(url);
     if (local) return fs.readFile(local);
+    if (this.postgres) {
+      const objectPath = objectPathDeUrl(url, this.bucket);
+      if (!objectPath) throw new Error('URL de download inválida');
+      return this.lerPostgres(objectPath);
+    }
     if (this.local || !this.client) {
       throw new Error('URL de download inválida');
     }
@@ -225,6 +271,13 @@ class FileStorageService {
       const local = this.caminhoDeUrlLocal(url);
       if (local) {
         await fs.unlink(local).catch(() => undefined);
+        return;
+      }
+      if (this.postgres) {
+        const objectPath = objectPathDeUrl(url, this.bucket);
+        if (objectPath) {
+          await AppDataSource.query('DELETE FROM arquivos_storage WHERE caminho = $1', [objectPath]);
+        }
         return;
       }
       if (!this.client) return;

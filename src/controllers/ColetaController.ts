@@ -15,6 +15,7 @@ import {
 import QualidadeDadosService from '../services/QualidadeDadosService';
 import { analisarQualidadePlanilha } from '../services/QualidadePlanilhaPreviewService';
 import AppDataSource from '../database/data-source';
+import FileStorageService from '../services/FileStorageService';
 import { User } from '../entities/User';
 import { TipoServico } from '../enums/TipoServico';
 import { buildConfigDashboardPadraoColeta } from '../config/dashboardPadraoColeta';
@@ -1105,6 +1106,34 @@ export class ColetaController {
     } catch (error: any) {
       console.error('Erro ao exportar planilha:', error);
       res.status(500).json({ error: error.message || 'Erro ao exportar planilha.' });
+    }
+  }
+
+  /**
+   * GET /api/coleta/uploads/:id/original
+   * Devolve o arquivo guardado (disco, MinIO ou arquivos_storage).
+   */
+  async baixarOriginal(req: Request, res: Response): Promise<void> {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (isNaN(id)) {
+        res.status(400).json({ error: 'ID inválido.' });
+        return;
+      }
+      const upload = await AppDataSource.getRepository(PlanilhaUpload).findOne({ where: { id } });
+      if (!upload?.urlDownload) {
+        res.status(404).json({ error: 'Arquivo original não encontrado.' });
+        return;
+      }
+      const buffer = await FileStorageService.downloadArquivo(upload.urlDownload);
+      const nome = String(upload.nomeArquivo || `planilha-${id}`).replace(/["\r\n]/g, '_');
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${nome}"`);
+      res.send(buffer);
+    } catch (error: any) {
+      console.error('Erro ao baixar planilha original:', error);
+      const status = /não encontrado|inválida/i.test(String(error?.message || '')) ? 404 : 500;
+      res.status(status).json({ error: error.message || 'Erro ao baixar a planilha original.' });
     }
   }
 

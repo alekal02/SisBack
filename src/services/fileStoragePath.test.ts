@@ -33,6 +33,17 @@ describe('objectPathDeUrl', () => {
     );
   });
 
+  it('lê o caminho de uma URL gravada no banco', () => {
+    assert.equal(
+      objectPathDeUrl('db://arquivos/planilhas/a.xlsx', bucket),
+      'planilhas/a.xlsx',
+    );
+    assert.equal(
+      objectPathDeUrl('db://arquivos/planilhas-ciclo/contrato/folha.xlsx', bucket),
+      'planilhas-ciclo/contrato/folha.xlsx',
+    );
+  });
+
   it('rejeita URL sem caminho', () => {
     assert.equal(objectPathDeUrl('http://localhost:9002/abastecimentos', bucket), null);
     assert.equal(objectPathDeUrl('nao-e-url', bucket), null);
