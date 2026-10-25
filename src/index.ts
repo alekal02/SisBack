@@ -67,7 +67,6 @@ app.get('/health', (req: Request, res: Response) => {
 });
 
 import authRoutes from './routes/auth';
-import dashboardRoutes from './routes/dashboard';
 import coletaRoutes from './routes/coleta';
 import contractsRoutes from './routes/contracts';
 import servicosRoutes from './routes/servicos';
@@ -80,26 +79,17 @@ import wuzapiRoutes from './routes/wuzapi';
 import salaTecnicaRoutes from './routes/salaTecnica';
 import pdfRoutes from './routes/pdf';
 import { DashboardExecutivoController } from './controllers/DashboardExecutivoController';
-import { ModeloExecutivoController } from './controllers/ModeloExecutivoController';
 import { registrarControllerExecutivo } from './services/executivoCacheWarmupService';
 
 const servicoCtrl = new ServicoController();
 const dashboardExecutivoCtrl = new DashboardExecutivoController();
-const modeloExecutivoCtrl = new ModeloExecutivoController();
 registrarControllerExecutivo(dashboardExecutivoCtrl);
 
 // Rotas públicas
 app.use('/api/auth', authRoutes);
 
-// Catálogo de fórmulas do Modelo Executivo (fonte única backend)
-app.get('/api/modelo-executivo/formulas', authenticate, (req, res) => modeloExecutivoCtrl.listarFormulas(req, res));
-
-// ⚠️ Rotas do Dashboard Executivo ANTES do router de dashboard (para evitar 404)
 app.get('/api/dashboard/executivo', authenticate, (req, res) => dashboardExecutivoCtrl.executivo(req, res));
-app.get('/api/dashboard/diagnostico', authenticate, (req, res) => dashboardExecutivoCtrl.diagnostico(req, res));
 app.post('/api/dashboard/executivo/pdf', authenticate, (req, res) => dashboardExecutivoCtrl.gerarPdf(req, res));
-
-app.use('/api/dashboard', authenticate, dashboardRoutes);
 
 // ⭐ QUALIDADE — rotas ANTES do coletaRoutes
 import qualidadeService from './services/QualidadeDadosService';
@@ -299,7 +289,6 @@ app.use('/api/sala-tecnica', salaTecnicaRoutes);
 app.use('/api/tipo-servico', authenticate, tipoServicoRoutes);
 
 // Rotas consolidadas para Dashboard Principal
-app.get('/api/dashboard/diagnostico-servicos', authenticate, (req, res) => servicoCtrl.getDiagnosticoTodosServicos(req, res));
 app.get('/api/dashboard/kpis-consolidado', authenticate, (req, res) => servicoCtrl.getKpisConsolidado(req, res));
 app.get('/api/dashboard/servicos-por-tipo', authenticate, (req, res) => servicoCtrl.listarServicosPorTipoGlobal(req, res));
 app.get('/api/dashboard/comparar-por-tipo', authenticate, (req, res) => servicoCtrl.getCompararKpisGlobal(req, res));

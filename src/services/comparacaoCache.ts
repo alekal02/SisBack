@@ -20,7 +20,6 @@ const PREFIXOS_AGREGADOS = [
   'kpis-consolidado:',
   'comparar-global:',
   'comparar-tipo:',
-  'diagnostico-servicos:',
 ];
 
 export function getEndpointCache<T>(key: string): T | null {

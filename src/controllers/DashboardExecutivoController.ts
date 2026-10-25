@@ -50,7 +50,6 @@ import {
   recortarPeriodoAteReferencia,
   primeirosNDiasPeriodo,
 } from '../utils/periodoCicloContrato';
-import { diagnosticarDashboards } from '../services/diagnosticoDashboardService';
 import { TIPOS_SERVICO_META } from '../enums/TipoServico';
 import crypto from 'crypto';
 
@@ -2227,28 +2226,6 @@ export class DashboardExecutivoController {
       diasRestantes,
       diasPassados,
     };
-  }
-
-  /* ═══════════════════════════════════════════
-     DIAGNÓSTICO DE DADOS (executivo + operação + receita)
-     GET /api/dashboard/diagnostico
-     ═══════════════════════════════════════════ */
-  async diagnostico(req: Request, res: Response): Promise<void> {
-    try {
-      const { contractId, servicoId } = req.query as Record<string, string | undefined>;
-      if (ehHubDeContratos(req.usuario) && !contractId) {
-        res.status(409).json({
-          error: 'Cada contrato está no seu próprio banco: escolha um contrato para o diagnóstico.',
-          precisaEscolherContrato: true,
-        });
-        return;
-      }
-      const resultado = await diagnosticarDashboards({ contractId, servicoId });
-      res.json(resultado);
-    } catch (error: any) {
-      console.error('Erro no diagnóstico de dashboard:', error);
-      res.status(500).json({ error: error?.message || 'Erro ao diagnosticar dashboards' });
-    }
   }
 
   /* ═══════════════════════════════════════════
