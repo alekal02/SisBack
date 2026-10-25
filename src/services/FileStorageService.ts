@@ -6,6 +6,31 @@ import path from 'path';
 
 const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
 
+const BUCKETS_ANTIGOS = new Set(['abastecimentos']);
+
+/**
+ * Ignora host e o nome do bucket antigo. O que resta é o caminho do objeto
+ * no bucket configurado agora (MINIO_BUCKET).
+ */
+export function objectPathDeUrl(url: string, bucketAtual: string): string | null {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  const parts = pathname.split('/').filter(Boolean).map((parte) => {
+    try { return decodeURIComponent(parte); } catch { return parte; }
+  });
+  if (parts.length === 0) return null;
+  const primeiro = parts[0];
+  const resto = (primeiro === bucketAtual || BUCKETS_ANTIGOS.has(primeiro))
+    ? parts.slice(1)
+    : parts;
+  if (resto.length === 0) return null;
+  return normalizarObjectPath(resto.join('/'));
+}
+
 function normalizarObjectPath(objectPath: string): string {
   const pathNorm = String(objectPath || '')
     .replace(/\\/g, '/')
@@ -174,20 +199,6 @@ class FileStorageService {
     return `${this.publicUrl}/${this.bucket}/${pathNorm}`;
   }
 
-  private extrairObjectPath(url: string): { bucket: string; objectPath: string } | null {
-    try {
-      const urlObj = new URL(url);
-      const parts = urlObj.pathname.split('/').filter(Boolean);
-      if (parts.length < 2) return null;
-      const bucket = parts[0];
-      const objectPath = parts.slice(1).join('/');
-      if (!bucket || !objectPath) return null;
-      return { bucket, objectPath };
-    } catch {
-      return null;
-    }
-  }
-
   async downloadArquivo(url: string): Promise<Buffer> {
     const local = this.caminhoDeUrlLocal(url);
     if (local) return fs.readFile(local);
@@ -195,12 +206,11 @@ class FileStorageService {
       throw new Error('URL de download inválida');
     }
 
-    const parsed = this.extrairObjectPath(url);
-    if (!parsed) {
+    const objectPath = objectPathDeUrl(url, this.bucket);
+    if (!objectPath) {
       throw new Error('URL de download inválida');
     }
-    const bucket = parsed.bucket === this.bucket ? this.bucket : parsed.bucket;
-    const stream = await this.client.getObject(bucket, parsed.objectPath);
+    const stream = await this.client.getObject(this.bucket, objectPath);
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
       stream.on('data', (chunk: Buffer) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
@@ -218,9 +228,9 @@ class FileStorageService {
         return;
       }
       if (!this.client) return;
-      const parsed = this.extrairObjectPath(url);
-      if (parsed && parsed.bucket === this.bucket && parsed.objectPath) {
-        await this.client.removeObject(this.bucket, parsed.objectPath);
+      const objectPath = objectPathDeUrl(url, this.bucket);
+      if (objectPath) {
+        await this.client.removeObject(this.bucket, objectPath);
       }
     } catch (error) {
       console.warn('[FileStorageService] Erro ao remover imagem:', error);
