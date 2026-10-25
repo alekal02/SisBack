@@ -58,9 +58,7 @@ app.get('/health', (req: Request, res: Response) => {
 });
 
 import authRoutes from './routes/auth';
-import abastecimentoRoutes from './routes/abastecimento';
 import dashboardRoutes from './routes/dashboard';
-import caminhaoRoutes from './routes/caminhoes';
 import coletaRoutes from './routes/coleta';
 import contractsRoutes from './routes/contracts';
 import servicosRoutes from './routes/servicos';
@@ -86,9 +84,6 @@ registrarControllerExecutivo(dashboardExecutivoCtrl);
 // Rotas públicas
 app.use('/api/auth', authRoutes);
 
-// Rotas protegidas (requerem autenticação)
-app.use('/api/abastecimentos', authenticate, abastecimentoRoutes);
-
 // Catálogo de fórmulas do Modelo Executivo (fonte única backend)
 app.get('/api/modelo-executivo/formulas', authenticate, (req, res) => modeloExecutivoCtrl.listarFormulas(req, res));
 
@@ -98,7 +93,6 @@ app.get('/api/dashboard/diagnostico', authenticate, (req, res) => dashboardExecu
 app.post('/api/dashboard/executivo/pdf', authenticate, (req, res) => dashboardExecutivoCtrl.gerarPdf(req, res));
 
 app.use('/api/dashboard', authenticate, dashboardRoutes);
-app.use('/api/caminhoes', authenticate, caminhaoRoutes);
 
 // ⭐ QUALIDADE — rotas ANTES do coletaRoutes
 import qualidadeService from './services/QualidadeDadosService';
