@@ -10,7 +10,7 @@ import { buscarRoteamentoGrupo } from './whatsappRoteamentoService';
 import { WhatsappGrupoMapa } from '../entities/WhatsappGrupoMapa';
 import { Servico } from '../entities/Servico';
 import { Contract } from '../entities/Contract';
-import { TipoServico, TIPOS_SERVICO_META } from '../enums/TipoServico';
+import { TipoServico } from '../enums/TipoServico';
 import DeduplicacaoService from './DeduplicacaoService';
 import RocadaImportService from './rocadaImportService';
 import ServicosUnificadosImportService from './servicosUnificadosImportService';
@@ -21,20 +21,7 @@ import { obterServicoPorTipoContrato } from './servicosPadraoContratoService';
 import PlanilhaService from './PlanilhaService';
 import { invalidarCacheSaudeContratos } from '../controllers/ContractController';
 import { marcarOrigemPlanilhaUpload } from './planilhaOriginalStorage';
-import { htmlToPdf, liberarNavegadorPdf } from './PdfGeneratorService';
-import { gerarHtmlSaudeDadosServer } from './PdfSaudeDadosHtml';
-import { gerarHtmlRelatorioDiaRocadaServer } from './PdfRelatorioDiaHtml';
-import { analisarViagensPlanilha } from './analisarViagensPlanilhaService';
-import { getAgregacaoRocada } from './rocadaAgregacaoService';
-import { extrairCadastroOperacional } from '../utils/configOperacional';
-import { montarHtmlRelatorioDiaColeta } from './relatorioDia/montarRelatorioDiaColeta';
-import { montarPacoteConsolidado } from './consolidadoProducaoRelatorio';
-import { gerarHtmlRelatorioDiaServicoProducao, gerarHtmlRelatorioCicloServicoProducao } from './relatorioDia/gerarHtmlRelatorioDiaConsolidado';
-import { gerarNomePdfDiaServicoProducao, gerarNomePdfCicloServicoProducao } from './relatorioDia/gerarNomePdf';
-import {
-  parsearPlanilhaConsolidadoProducao,
-  agruparLinhasPorServicoAba,
-} from './consolidadoProducaoPlanilhaParser';
+import { liberarNavegadorPdf } from './PdfGeneratorService';
 import wuzapiService from './WuzapiService';
 import {
   extrairTextoMensagem,
@@ -861,231 +848,14 @@ export class WhatsappPlanilhaPipelineService {
       await marcarOrigemPlanilhaUpload(importResult.planilhaUploadId, 'whatsapp');
     }
 
-    return this.posImport(mapa, servico, grupoJid, nomeArquivo, importResult, buffer);
-  }
-
-  /** Envia relatório do último dia operacional de um serviço (PDF ou texto). */
-  private async enviarRelatorioUltimoDia(
-    servico: Servico,
-    contrato: Contract | null,
-    grupoJid: string,
-    bufferPlanilha: Buffer,
-    nomeArquivo: string,
-    planilhaUploadId?: number,
-  ): Promise<{ pdfSaude: boolean; pdfDiario: boolean; ultimoDia: string | null; erros: string[] }> {
-    const contratoNome = contrato?.numeroContrato || '—';
-    const tipoSvc = String(servico.tipo || '');
-    const tipoLabel = TIPOS_SERVICO_META[tipoSvc]?.label || tipoSvc || 'Serviço';
-    const ehRocada = tipoSvc === TipoServico.ROCADEIRA || tipoSvc === 'rocadeira';
-    const ehUnidadeNaoRocada = (
-      tipoSvc === TipoServico.CAPINA || tipoSvc === 'capina'
-      || tipoSvc === TipoServico.VARRICAO || tipoSvc === 'varricao'
-      || tipoSvc === TipoServico.PODA || tipoSvc === 'poda'
-      || tipoSvc === 'pintura_meio_fio'
-    );
-
-    // O PDF deve representar o último dia DESTE arquivo, não o maior dia histórico
-    // já existente no serviço (um reenvio de ciclo antigo não pode gerar PDF de outro upload).
-    const periodoUpload = planilhaUploadId
-      ? await PlanilhaService.getPeriodoDadosPorUpload(planilhaUploadId, servico.id)
-      : null;
-    const periodo = periodoUpload || await PlanilhaService.getPeriodoDadosPorServico(servico.id);
-    const ultimoDia = periodo?.dataFim || null;
-    let pdfSaude = false;
-    let pdfDiario = false;
-    const erros: string[] = [];
-
-    if (!ehRocada && !ehUnidadeNaoRocada) {
-      try {
-        const cadastro = extrairCadastroOperacional(contrato?.configOperacional);
-        const relatorio = analisarViagensPlanilha(bufferPlanilha, nomeArquivo, cadastro);
-        const htmlSaude = gerarHtmlSaudeDadosServer({
-          relatorio,
-          contratoNome: String(contratoNome),
-          servicoNome: servico.nome,
-          tipoLabel,
-        });
-        const pdfBuf = await htmlToPdf(htmlSaude, {
-          margin: { top: '10mm', bottom: '10mm', left: '8mm', right: '8mm' },
-        });
-        await wuzapiService.enviarDocumento(
-          grupoJid,
-          `Saude_Dados_${servico.nome.replace(/[^\w\-]+/g, '_')}.pdf`,
-          pdfBuf,
-          `Saúde dos dados — ${servico.nome}`,
-        );
-        pdfSaude = true;
-      } catch (err: any) {
-        console.error('[WhatsappPipeline] Erro PDF saúde:', err?.message || err);
-        erros.push(`saúde ${servico.nome}: ${err?.message || 'erro'}`);
-      }
-    }
-
-    if (!ultimoDia) {
-      erros.push(`diário ${servico.nome}: sem dia operacional`);
-      return { pdfSaude, pdfDiario, ultimoDia, erros };
-    }
-
-    try {
-      const dataFmt = ultimoDia.split('-').reverse().join('-');
-      const dataBr = ultimoDia.split('-').reverse().join('/');
-
-      if (ehRocada) {
-        const agg = await getAgregacaoRocada(servico.id, { data: ultimoDia, topN: 15 });
-        const htmlDia = gerarHtmlRelatorioDiaRocadaServer({
-          servicoNome: servico.nome,
-          contratoNome: String(contratoNome),
-          dataIso: ultimoDia,
-          resumo: agg.resumo,
-          porBairro: (agg.porBairro || []).map((l) => ({
-            label: l.label,
-            registros: l.registros,
-            areaM2: l.areaM2,
-          })),
-          porOperador: (agg.porOperador || []).map((l) => ({
-            label: l.label,
-            registros: l.registros,
-            areaM2: l.areaM2,
-          })),
-        });
-        const pdfDia = await htmlToPdf(htmlDia, {
-          margin: { top: '10mm', bottom: '10mm', left: '8mm', right: '8mm' },
-        });
-        await wuzapiService.enviarDocumento(
-          grupoJid,
-          `Relatorio_Dia_${dataFmt}_${servico.nome.replace(/[^\w\-]+/g, '_')}.pdf`,
-          pdfDia,
-          `Roçada ${dataBr} — ${servico.nome}`,
-        );
-        pdfDiario = true;
-      } else if (ehUnidadeNaoRocada) {
-        const dias = await PlanilhaService.getMetricasPorDia(servico.id, ultimoDia, ultimoDia);
-        const d = dias[0];
-        const linhasMsg = [
-          `*${servico.nome}* — ${dataBr}`,
-          `Registros: ${d?.rotas ?? 0}`,
-        ];
-        if (Number(d?.metroLinear || 0) > 0) {
-          linhasMsg.push(`Metro linear: ${Number(d?.metroLinear).toLocaleString('pt-BR')} m`);
-        }
-        if (Number(d?.kmLinear || 0) > 0) {
-          linhasMsg.push(`Extensão: ${Number(d?.kmLinear).toLocaleString('pt-BR', { maximumFractionDigits: 3 })} km`);
-        }
-        if (Number(d?.areaM2 || 0) > 0) {
-          linhasMsg.push(`Área: ${Number(d?.areaM2).toLocaleString('pt-BR')} m²`);
-        }
-        if (Number(d?.qtdArvore || 0) > 0) {
-          linhasMsg.push(`Árvores: ${Number(d?.qtdArvore).toLocaleString('pt-BR')}`);
-        }
-        if (Number(d?.quantitativo || 0) > 0) {
-          linhasMsg.push(`Quantitativo: ${Number(d?.quantitativo).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}`);
-        }
-        await wuzapiService.enviarTexto(grupoJid, linhasMsg.join('\n'));
-        pdfDiario = true;
-      } else {
-        const { html: htmlDia, nomeArquivo: nomeDia } = await montarHtmlRelatorioDiaColeta({
-          servico,
-          contrato: contrato || null,
-          dataIso: ultimoDia,
-        });
-        const pdfDia = await htmlToPdf(htmlDia, {
-          margin: { top: '10mm', bottom: '10mm', left: '8mm', right: '8mm' },
-        });
-        await wuzapiService.enviarDocumento(
-          grupoJid,
-          nomeDia,
-          pdfDia,
-          `Operação ${dataBr} — ${servico.nome}`,
-        );
-        pdfDiario = true;
-      }
-    } catch (err: any) {
-      console.error('[WhatsappPipeline] Erro relatório diário:', err?.message || err);
-      erros.push(`diário ${servico.nome}: ${err?.message || 'erro'}`);
-    }
-
-    return { pdfSaude, pdfDiario, ultimoDia, erros };
-  }
-
-  private async enviarRelatoriosPorAbaProducao(
-    contrato: Contract | null,
-    grupoJid: string,
-    bufferPlanilha: Buffer,
-  ): Promise<{ pdfDiario: boolean; ultimoDia: string | null; erros: string[]; dias: Array<{ nome: string; dia: string | null }> }> {
-    const erros: string[] = [];
-    const dias: Array<{ nome: string; dia: string | null }> = [];
-    try {
-      const parsed = parsearPlanilhaConsolidadoProducao(bufferPlanilha);
-      const grupos = agruparLinhasPorServicoAba(parsed.linhas);
-      if (grupos.size === 0) {
-        return { pdfDiario: false, ultimoDia: null, erros: ['Produção: nenhuma aba com dados'], dias };
-      }
-      let pdfDiario = false;
-      let ultimoDia: string | null = null;
-      for (const [, linhasAba] of grupos) {
-        const meta = linhasAba[0];
-        const pacote = montarPacoteConsolidado(linhasAba, parsed.avisos.filter((a) => /repetiu|Power Query/i.test(a)));
-        if (!pacote) continue;
-        const htmlDia = gerarHtmlRelatorioDiaServicoProducao({
-          contratoNome: String(contrato?.numeroContrato || '—'),
-          servicoNome: meta.nomeServico,
-          pacote,
-        });
-        const htmlCiclo = gerarHtmlRelatorioCicloServicoProducao({
-          contratoNome: String(contrato?.numeroContrato || '—'),
-          servicoNome: meta.nomeServico,
-          pacote,
-        });
-        const pdfDiaBuf = await htmlToPdf(htmlDia, {
-          margin: { top: '10mm', bottom: '10mm', left: '8mm', right: '8mm' },
-        });
-        const pdfCicloBuf = await htmlToPdf(htmlCiclo, {
-          margin: { top: '10mm', bottom: '10mm', left: '8mm', right: '8mm' },
-        });
-        const nomeDia = gerarNomePdfDiaServicoProducao({
-          servicoNome: meta.nomeServico,
-          dataIso: pacote.dia.dataIso,
-        });
-        const nomeCiclo = gerarNomePdfCicloServicoProducao({
-          servicoNome: meta.nomeServico,
-          dataInicio: pacote.ciclo.dataInicio,
-          dataFim: pacote.ciclo.dataFim,
-        });
-        const dataBr = pacote.dia.dataIso.split('-').reverse().join('/');
-        const cicloBr = `${pacote.ciclo.dataInicio.split('-').reverse().join('/')} a ${pacote.ciclo.dataFim.split('-').reverse().join('/')}`;
-        await wuzapiService.enviarDocumento(
-          grupoJid,
-          `${nomeDia}.pdf`,
-          pdfDiaBuf,
-          `${meta.nomeServico} — operação ${dataBr}`,
-        );
-        await wuzapiService.enviarDocumento(
-          grupoJid,
-          `${nomeCiclo}.pdf`,
-          pdfCicloBuf,
-          `${meta.nomeServico} — ciclo ${cicloBr}`,
-        );
-        pdfDiario = true;
-        ultimoDia = pacote.dia.dataIso;
-        dias.push({ nome: meta.nomeServico, dia: pacote.dia.dataIso });
-      }
-      if (!pdfDiario) {
-        return { pdfDiario: false, ultimoDia: null, erros: ['Produção: sem dia operacional nas abas'], dias };
-      }
-      return { pdfDiario, ultimoDia, erros, dias };
-    } catch (err: any) {
-      console.error('[WhatsappPipeline] PDF por aba:', err?.message || err);
-      return { pdfDiario: false, ultimoDia: null, erros: [`PDF por aba: ${err?.message || 'erro'}`], dias };
-    }
+    return this.posImport(servico, grupoJid, nomeArquivo, importResult);
   }
 
   private async posImport(
-    _mapa: WhatsappGrupoMapa,
     servicoMapa: Servico,
     grupoJid: string,
     nomeArquivo: string,
     importResult: ResultadoImportWhatsapp,
-    _bufferPlanilha: Buffer,
   ) {
     const contrato = (servicoMapa as Servico & { contract?: Contract }).contract
       || await AppDataSource.getRepository(Contract).findOne({ where: { id: servicoMapa.contract_id } });
