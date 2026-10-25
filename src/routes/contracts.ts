@@ -27,15 +27,4 @@ router.put('/:id', authenticate, tenantGuard, (req, res) => controller.atualizar
 // Excluir contrato — apenas admin (ação destrutiva)
 router.delete('/:id', authenticate, tenantGuard, adminOnly, (req, res) => controller.excluir(req, res));
 
-// KPIs do contrato
-router.get('/:id/kpis', authenticate, tenantGuard, (req, res) => controller.listarKpis(req, res));
-router.put('/:id/kpis', authenticate, tenantGuard, (req, res) => controller.salvarKpis(req, res));
-
-// ⭐ Saúde de um contrato específico
-router.get('/:id/saude', authenticate, tenantGuard, (req, res) => controller.saudeDetalhe(req, res));
-
-// Configuração do resumo executivo do contrato
-router.get('/:id/config-resumo', authenticate, tenantGuard, (req, res) => controller.getConfigResumo(req, res));
-router.put('/:id/config-resumo', authenticate, tenantGuard, (req, res) => controller.salvarConfigResumo(req, res));
-
 export default router;
