@@ -10,9 +10,6 @@ router.use(authenticate, tenantGuard);
 // GET /api/contracts/:contractId/servicos
 router.get('/', authenticate, (req, res) => controller.listar(req, res));
 
-// GET /api/contracts/:contractId/servicos-kpis
-router.get('/kpis', authenticate, (req, res) => controller.listarKpisDeServicos(req, res));
-
 // GET /api/contracts/:contractId/servicos/comparar-por-tipo?tipoServico=coleta_caminhao
 router.get('/comparar-por-tipo', authenticate, (req, res) => controller.getCompararKpisPorTipo(req, res));
 
@@ -76,14 +73,8 @@ router.post('/:id/ciclos/reabrir', authenticate, (req, res) => controller.reabri
 // GET /api/contracts/:contractId/servicos/:id/verificacao-viagens
 router.get('/:id/verificacao-viagens', authenticate, (req, res) => controller.getVerificacaoViagens(req, res));
 
-// GET /api/contracts/:contractId/servicos/:id/relatorio-sobrecarga-peso
-router.get('/:id/relatorio-sobrecarga-peso', authenticate, (req, res) => controller.getRelatorioSobrecargaPeso(req, res));
-
 // PUT /api/contracts/:contractId/servicos/:id/config-dashboard
 router.put('/:id/config-dashboard', authenticate, (req, res) => controller.salvarConfigDashboard(req, res));
-
-// POST /api/contracts/:contractId/servicos/:id/gerar-indicadores
-router.post('/:id/gerar-indicadores', authenticate, (req, res) => controller.gerarIndicadores(req, res));
 
 // POST /api/contracts/:contractId/servicos/:id/analisar-indicadores-automaticos
 // ⭐ Analisa colunas e retorna indicadores + gráficos sugeridos (tela de revisão)
@@ -92,16 +83,6 @@ router.post('/:id/analisar-indicadores-automaticos', authenticate, (req, res) =>
 // POST /api/contracts/:contractId/servicos/:id/confirmar-indicadores-automaticos
 // Confirma e salva os indicadores automáticos sugeridos
 router.post('/:id/confirmar-indicadores-automaticos', authenticate, (req, res) => controller.confirmarIndicadoresAutomaticos(req, res));
-
-// POST /api/contracts/:contractId/servicos/:id/reanalisar-colunas
-// Reanalisa colunas após novo upload e detecta mudanças
-router.post('/:id/reanalisar-colunas', authenticate, (req, res) => controller.reanalisarColunas(req, res));
-
-// GET /api/contracts/:contractId/servicos/:id/config-resumo
-router.get('/:id/config-resumo', authenticate, (req, res) => controller.getConfigResumo(req, res));
-
-// PUT /api/contracts/:contractId/servicos/:id/config-resumo
-router.put('/:id/config-resumo', authenticate, (req, res) => controller.salvarConfigResumo(req, res));
 
 // PUT /api/contracts/:contractId/servicos/:id/colunas/tipo
 router.put('/:id/colunas/tipo', authenticate, (req, res) => controller.alterarTipoColuna(req, res));
@@ -115,12 +96,6 @@ router.get('/:id/kpi-valores', authenticate, (req, res) => controller.getKpiValo
 
 // GET /api/contracts/:contractId/servicos/:id/kpi-exec-metrics
 router.get('/:id/kpi-exec-metrics', authenticate, (req, res) => controller.getExecMetrics(req, res));
-
-// POST /api/contracts/:contractId/servicos/:id/kpi-calculate
-router.post('/:id/kpi-calculate', authenticate, (req, res) => controller.calculateKpis(req, res));
-
-// POST /api/contracts/:contractId/servicos/:id/grafico-agregado
-router.post('/:id/grafico-agregado', authenticate, (req, res) => controller.getGraficoAgregado(req, res));
 
 // POST /api/contracts/:contractId/servicos/:id/graficos-agregados — todos os gráficos em 1 requisição
 router.post('/:id/graficos-agregados', authenticate, (req, res) => controller.getGraficosAgregadosBatch(req, res));
@@ -144,21 +119,6 @@ router.put('/:id/config-faturamento', authenticate, (req, res) => controller.sal
 // GET /api/contracts/:contractId/servicos/:id/kpi-operacional-motoristas
 // ⭐ KPIs agregados por motorista e rota
 router.get('/:id/kpi-operacional-motoristas', authenticate, (req, res) => controller.getKpiOperacionalMotoristas(req, res));
-
-// POST /api/contracts/:contractId/servicos/:id/aplicar-graficos-padrao
-// Aplica graficos padrao automaticamente com base no tipo de servico e colunas
-router.post('/:id/aplicar-graficos-padrao', authenticate, (req, res) => controller.aplicarGraficosPadrao(req, res));
-
-// GET /api/contracts/:contractId/servicos/:id/graficos-padrao-lista
-// Retorna lista de graficos padrao disponiveis para o servico
-router.get('/:id/graficos-padrao-lista', authenticate, (req, res) => controller.getGraficosPadraoLista(req, res));
-
-// POST /api/contracts/:contractId/servicos/:id/re-resolver-graficos
-// ⭐ Re-resolve placeholders dos graficos existentes com base nas colunas atuais
-router.post('/:id/re-resolver-graficos', authenticate, (req, res) => controller.reResolverGraficosPlaceholder(req, res));
-
-// PUT /api/contracts/:contractId/servicos/:id
-router.put('/:id', authenticate, (req, res) => controller.atualizar(req, res));
 
 // DELETE /api/contracts/:contractId/servicos/:id
 router.delete('/:id', authenticate, (req, res) => controller.excluir(req, res));
