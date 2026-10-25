@@ -34,7 +34,6 @@
     "pg": "^8.20.0",
     "puppeteer": "^25.0.4",
     "reflect-metadata": "^0.2.2",
-    "tesseract.js": "^7.0.0",
     "ts-node": "^10.9.2",
     "typeorm": "^0.3.28",
     "typescript": "^6.0.3",
@@ -42,7 +41,6 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
