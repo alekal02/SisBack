@@ -248,40 +248,6 @@ export class GraficoPadraoController {
   }
 
   /**
-   * GET /api/graficos-padrao/biblioteca/estatisticas
-   * Retorna contagem de gráficos por tipo de serviço (para tela de seleção).
-   */
-  async listarEstatisticas(req: Request, res: Response): Promise<any> {
-    try {
-      const totalRegistros = await this.repository.count();
-      if (totalRegistros === 0) {
-        await this._seedBiblioteca();
-      }
-
-      // Agrupa por tipoServico e conta
-      const result = await this.repository
-        .createQueryBuilder('g')
-        .select('g.tipoServico', 'tipo')
-        .addSelect('COUNT(*)', 'total')
-        .addSelect('SUM(CASE WHEN g.ativo = true THEN 1 ELSE 0 END)', 'ativos')
-        .groupBy('g.tipoServico')
-        .orderBy('g.tipoServico')
-        .getRawMany();
-
-      return res.json({
-        tipos: result.map((r: any) => ({
-          tipo: r.tipo,
-          total: Number(r.total),
-          ativos: Number(r.ativos),
-        })),
-      });
-    } catch (error: any) {
-      console.error('Erro ao listar estatísticas:', error?.message || error);
-      return res.status(500).json({ error: 'Erro ao carregar estatísticas' });
-    }
-  }
-
-  /**
    * GET /api/graficos-padrao/biblioteca/verificar-servico/:servicoId
    * Retorna os gráficos padrão que seriam gerados para um serviço específico,
    * já resolvendo placeholders com as colunas da planilha.

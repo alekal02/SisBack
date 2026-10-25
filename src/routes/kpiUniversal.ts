@@ -18,8 +18,6 @@ router.get('/:id', (req, res) => controller.buscarUm(req, res));
 
 router.post('/ativar-multiplos', adminOnly, (req, res) => controller.ativarMultiplos(req, res));
 router.post('/importar-de-servico', adminOnly, (req, res) => controller.importarDeServico(req, res));
-router.post('/importar-todos-servicos', adminOnly, (req, res) => controller.importarTodosServicos(req, res));
-router.post('/sincronizar-biblioteca', adminOnly, (req, res) => controller.sincronizarBiblioteca(req, res));
 router.post('/', adminOnly, (req, res) => controller.criar(req, res));
 router.put('/:id', adminOnly, (req, res) => controller.atualizar(req, res));
 router.delete('/:id', adminOnly, (req, res) => controller.excluir(req, res));

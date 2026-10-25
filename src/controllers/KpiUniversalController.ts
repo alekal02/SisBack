@@ -5,7 +5,6 @@ import { KpiUniversal, PlaceholderKpi } from '../entities/KpiUniversal';
 import { Servico } from '../entities/Servico';
 import { TIPOS_SERVICO_VALORES } from '../enums/TipoServico';
 import { deduplicarKpisLista } from '../services/kpiDeduplicacaoService';
-import { sincronizarKpisUniversaisBiblioteca } from '../database/sincronizarKpisUniversaisBiblioteca';
 
 /** Helper: extrai param como string */
 function paramStr(req: Request, name: string): string {
@@ -537,21 +536,6 @@ export class KpiUniversalController {
       return res.status(500).json({ error: 'Erro ao ativar múltiplos KPIs universais' });
     }
   }
-
-  /**
-   * POST /api/kpis-universais/sincronizar-biblioteca
-   * Remove KPIs de sistema obsoletos e alinha a biblioteca ao catálogo do código.
-   */
-  async sincronizarBiblioteca(req: Request, res: Response): Promise<any> {
-    try {
-      const resultado = await sincronizarKpisUniversaisBiblioteca();
-      return res.json({ sucesso: true, ...resultado });
-    } catch (error) {
-      console.error('Erro ao sincronizar biblioteca de KPIs universais:', error);
-      return res.status(500).json({ error: 'Erro ao sincronizar biblioteca de KPIs universais' });
-    }
-  }
-
   /**
    * GET /api/kpis-universais/tipos
    * Retorna os tipos de serviço que têm KPIs universais cadastrados
@@ -674,102 +658,6 @@ export class KpiUniversalController {
       return res.status(500).json({ error: 'Erro ao verificar serviço' });
     }
   }
-
-  /**
-   * POST /api/kpis-universais/importar-todos-servicos
-   * Importa KPIs de TODOS os serviços para a biblioteca universal
-   * Body (opcional): { contratoId?: string } — se quiser filtrar por contrato
-   */
-  async importarTodosServicos(req: Request, res: Response): Promise<any> {
-    try {
-      const { contratoId } = req.body;
-
-      const whereServicos: any = {};
-      if (contratoId) whereServicos.contract_id = contratoId;
-
-      const servicos = await this.servicoRepo.find({ where: whereServicos });
-      const servicosComKpis = servicos.filter(s => s.configDashboard?.kpis?.length > 0);
-
-      let totalImportados = 0;
-      let totalServicosComKpis = 0;
-      const resultados: any[] = [];
-
-      for (const servico of servicosComKpis) {
-        const kpisOriginais: any[] = servico.configDashboard?.kpis || [];
-        const tipoServico = servico.tipo || 'geral';
-        let importadosServico = 0;
-
-        for (const kpi of kpisOriginais) {
-          // Extrair placeholders da fórmula
-          const placeholders: PlaceholderKpi[] = [];
-          if (kpi.expressao) {
-            const colRegex = /\b([A-ZÀ-Ú][A-ZÀ-Ú\s]+[A-ZÀ-Ú])\b/g;
-            let match;
-            while ((match = colRegex.exec(kpi.expressao)) !== null) {
-              const nome = match[1].trim();
-              if (nome.length > 2 && !['SUM', 'AVG', 'MIN', 'MAX', 'COUNT', 'DISTINCT', 'IF', 'ABS', 'ROUND', 'DIVIDE', 'MULTIPLY', 'FATURAMENTO_EST', 'SE', 'TRUE', 'FALSE'].includes(nome) && !/^\d+(\.\d+)?$/.test(nome)) {
-                const jaExiste = placeholders.some(p => p.nome === nome);
-                if (!jaExiste) {
-                  placeholders.push({
-                    nome,
-                    label: nome,
-                    colunasCandidatas: [nome],
-                  });
-                }
-              }
-            }
-          }
-
-          // Verificar se já existe KPI igual pelo nome + tipo
-          const existente = await this.repository.findOne({
-            where: { nome: kpi.nome || kpi.label, tipoServico },
-          });
-          if (existente) continue; // Pula se já existe
-
-          const novo = new KpiUniversal();
-          novo.nome = kpi.nome || kpi.label || 'KPI importado';
-          novo.label = kpi.label || kpi.nome || 'KPI importado';
-          novo.formula = kpi.expressao || '';
-          novo.agregacao = kpi.agregacao || 'sum';
-          novo.formato = kpi.formato || 'numero';
-          novo.unidade = kpi.unidade || null;
-          novo.categoria = kpi.categoria || 'Importado';
-          novo.cor = kpi.cor || '#6366f1';
-          novo.descricao = kpi.descricao || `Importado do serviço: ${servico.nome}`;
-          novo.metaSugerida = kpi.meta || null;
-          novo.tipoServico = tipoServico;
-          novo.placeholders = placeholders.length > 0 ? placeholders : null;
-          novo.isPersonalizado = true;
-
-          await this.repository.save(novo);
-          importadosServico++;
-          totalImportados++;
-        }
-
-        if (importadosServico > 0) {
-          totalServicosComKpis++;
-          resultados.push({
-            servicoId: servico.id,
-            servicoNome: servico.nome,
-            tipoServico,
-            importados: importadosServico,
-          });
-        }
-      }
-
-      return res.json({
-        totalImportados,
-        totalServicos: servicosComKpis.length,
-        servicosComKpis: totalServicosComKpis,
-        resultados,
-        mensagem: `${totalImportados} KPI(s) importado(s) de ${totalServicosComKpis} serviço(s)`,
-      });
-    } catch (error: any) {
-      console.error('Erro ao importar todos os serviços:', error?.message || error);
-      return res.status(500).json({ error: 'Erro ao importar KPIs de todos os serviços' });
-    }
-  }
-
   /**
    * GET /api/kpis-universais/listar-kpis-servicos
    * Lista TODOS os KPIs de todos os serviços do sistema (para visualização)

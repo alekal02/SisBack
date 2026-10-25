@@ -74,7 +74,6 @@ import { authenticate } from './middlewares/authMiddleware';
 import { ServicoController } from './controllers/ServicoController';
 import kpiUniversalRoutes from './routes/kpiUniversal';
 import graficosPadraoRoutes from './routes/graficosPadrao';
-import tipoServicoRoutes from './routes/tipoServico';
 import wuzapiRoutes from './routes/wuzapi';
 import salaTecnicaRoutes from './routes/salaTecnica';
 import pdfRoutes from './routes/pdf';
@@ -284,9 +283,6 @@ app.use('/api/wuzapi', wuzapiRoutes);
 
 // Sala técnica (RelatoriosColeta) — token X-Chatbot-Secret, PDF até 40 MB
 app.use('/api/sala-tecnica', salaTecnicaRoutes);
-
-// Rotas do Catálogo de Tipos de Serviço
-app.use('/api/tipo-servico', authenticate, tipoServicoRoutes);
 
 // Rotas consolidadas para Dashboard Principal
 app.get('/api/dashboard/kpis-consolidado', authenticate, (req, res) => servicoCtrl.getKpisConsolidado(req, res));

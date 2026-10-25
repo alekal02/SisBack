@@ -58,70 +58,6 @@ export interface TipoServicoTemplate {
   kpis: KpiTemplate[];
   graficos: GraficoTemplate[];
 }
-
-export interface CategoriaTipo {
-  id: string;
-  label: string;
-  cor: string;
-  tipos: { id: string; label: string; cor: string; icone: string }[];
-}
-
-/* ═══════════════════════════════════════
-   CATEGORIAS — Organização Visual
-   ═══════════════════════════════════════ */
-export const CATEGORIAS: CategoriaTipo[] = [
-  {
-    id: 'coleta',
-    label: '🧺 Coleta',
-    cor: '#6366f1',
-    tipos: [
-      { id: 'coleta_caminhao', label: 'Coleta com Caminhão', cor: '#6366f1', icone: '🚛' },
-    ],
-  },
-  {
-    id: 'limpeza_urbana',
-    label: '🧹 Limpeza Urbana',
-    cor: '#22c55e',
-    tipos: [
-      { id: 'rocadeira', label: 'Roçada', cor: '#22c55e', icone: '🌿' },
-      { id: 'capina', label: 'Capina', cor: '#84cc16', icone: '🌱' },
-      { id: 'varricao', label: 'Varrição', cor: '#06b6d4', icone: '🧹' },
-    ],
-  },
-  {
-    id: 'poda',
-    label: '✂️ Poda',
-    cor: '#8b5cf6',
-    tipos: [
-      { id: 'poda', label: 'Poda', cor: '#8b5cf6', icone: '✂️' },
-    ],
-  },
-  {
-    id: 'infraestrutura',
-    label: '🏗️ Infraestrutura',
-    cor: '#f59e0b',
-    tipos: [
-      { id: 'pintura_meio_fio', label: 'Pintura', cor: '#f59e0b', icone: '🎨' },
-    ],
-  },
-  {
-    id: 'remocao',
-    label: '🚛 Remoção',
-    cor: '#ef4444',
-    tipos: [
-      { id: 'remocao', label: 'Remoção', cor: '#ef4444', icone: '🚛' },
-    ],
-  },
-  {
-    id: 'geral',
-    label: '📋 Geral',
-    cor: '#94a3b8',
-    tipos: [
-      { id: 'geral', label: 'Geral', cor: '#94a3b8', icone: '📋' },
-    ],
-  },
-];
-
 /* ═══════════════════════════════════════
    TEMPLATES POR TIPO
    ═══════════════════════════════════════ */
@@ -1326,17 +1262,6 @@ const TEMPLATES: Record<string, TipoServicoTemplate> = {
 /* ═══════════════════════════════════════
    SERVICOS EXPORTADOS
    ═══════════════════════════════════════ */
-
-/** Retorna todos os tipos organizados por categoria */
-export function listarCategorias(): CategoriaTipo[] {
-  return CATEGORIAS;
-}
-
-/** Retorna template completo de um tipo */
-export function getTemplate(tipoId: string): TipoServicoTemplate | null {
-  return TEMPLATES[tipoId] || null;
-}
-
 /** Retorna KPIs padrao de um tipo */
 export function getKpisPadrao(tipoId: string): KpiTemplate[] {
   if (tipoId === 'coleta_caminhao') {
@@ -1354,107 +1279,6 @@ export function getGraficosPadrao(tipoId: string): GraficoTemplate[] {
   const template = TEMPLATES[tipoId];
   return template?.graficos || [];
 }
-
-/** Retorna colunas esperadas de um tipo */
-export function getColunasEsperadas(tipoId: string): ColunaEsperada[] {
-  const template = TEMPLATES[tipoId];
-  return template?.colunas || [];
-}
-
-/** Gera modelo de planilha baseado no tipo */
-export function gerarModeloPlanilha(tipoId: string): { headers: string[]; linhas: string[][]; nome: string; descricao: string } {
-  const template = TEMPLATES[tipoId];
-  if (!template || template.colunas.length === 0) {
-    return {
-      headers: ['DATA', 'DESCRICAO', 'VALOR'],
-      linhas: [
-        ['01/01/2024', 'Exemplo de lancamento 1', '100'],
-        ['02/01/2024', 'Exemplo de lancamento 2', '200'],
-      ],
-      nome: 'modelo_geral',
-      descricao: 'Modelo generico para servicos nao categorizados',
-    };
-  }
-
-  const headers = template.colunas.map(c => c.nome);
-  const linhaExemplo: string[] = template.colunas.map(c => {
-    if (c.exemplos && c.exemplos.length > 0) return c.exemplos[0];
-    if (c.tipo === 'numero') return '0';
-    if (c.tipo === 'data') return '01/01/2024';
-    if (c.tipo === 'hora') return '08:00';
-    return 'Exemplo';
-  });
-
-  return {
-    headers,
-    linhas: [linhaExemplo, linhaExemplo.map(() => '')],
-    nome: `modelo_${template.id}`,
-    descricao: `Modelo de planilha para ${template.label}`,
-  };
-}
-
-/** Valida colunas de um upload contra as esperadas */
-export function validarColunasEsperadas(
-  tipoId: string,
-  colunasEncontradas: string[]
-): {
-  valido: boolean;
-  colunasObrigatorias: ColunaEsperada[];
-  colunasEncontradas: string[];
-  colunasAusentes: string[];
-  colunasAdicionais: string[];
-  pontuacao: number; // 0-100
-} {
-  const template = TEMPLATES[tipoId];
-  if (!template || template.colunas.length === 0) {
-    return {
-      valido: true,
-      colunasObrigatorias: [],
-      colunasEncontradas,
-      colunasAusentes: [],
-      colunasAdicionais: [],
-      pontuacao: 100,
-    };
-  }
-
-  const normalizar = (s: string) => s.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s\-_]+/g, '');
-
-  const colunasNorm = colunasEncontradas.map(normalizar);
-  const obrigatorias = template.colunas.filter(c => c.obrigatorio);
-  const todasColunas = template.colunas;
-
-  const colunasAusentes = obrigatorias.filter(c => {
-    const norm = normalizar(c.nome);
-    return !colunasNorm.some(cn => cn === norm || cn.includes(norm) || norm.includes(cn));
-  });
-
-  const colunasAusentesAll = todasColunas.filter(c => {
-    const norm = normalizar(c.nome);
-    return !colunasNorm.some(cn => cn === norm || cn.includes(norm) || norm.includes(cn));
-  });
-
-  const colunasAdicionais = colunasEncontradas.filter(c => {
-    const norm = normalizar(c);
-    return !todasColunas.some(tc => {
-      const tcNorm = normalizar(tc.nome);
-      return norm === tcNorm || norm.includes(tcNorm) || tcNorm.includes(norm);
-    });
-  });
-
-  // Pontuacao: 100 - penalidade por ausentes (cada obrigatoria -20)
-  const penalidadeObrigatorias = colunasAusentes.length * 20;
-  const pontuacao = Math.max(0, 100 - penalidadeObrigatorias);
-
-  return {
-    valido: colunasAusentes.length === 0,
-    colunasObrigatorias: obrigatorias,
-    colunasEncontradas,
-    colunasAusentes: colunasAusentesAll.map(c => c.nome),
-    colunasAdicionais,
-    pontuacao,
-  };
-}
-
 /** Converte KPIs do template para formato KpiConfig (usado no configDashboard) */
 export function converterKpisParaConfig(tipoId: string): any[] {
   const kpis = getKpisPadrao(tipoId);
@@ -1495,15 +1319,9 @@ export function converterGraficosParaConfig(tipoId: string): any[] {
 }
 
 export default {
-  listarCategorias,
-  getTemplate,
   getKpisPadrao,
   getGraficosPadrao,
-  getColunasEsperadas,
-  gerarModeloPlanilha,
-  validarColunasEsperadas,
   converterKpisParaConfig,
   converterGraficosParaConfig,
-  CATEGORIAS,
   TEMPLATES,
 };

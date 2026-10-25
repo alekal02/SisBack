@@ -12,9 +12,6 @@ router.get('/biblioteca', (req, res) => controller.listarBiblioteca(req, res));
 // POST /api/graficos-padrao/salvar-padrao
 router.post('/salvar-padrao', (req, res) => controller.salvarComoPadrao(req, res));
 
-// GET /api/graficos-padrao/biblioteca/estatisticas
-router.get('/biblioteca/estatisticas', (req, res) => controller.listarEstatisticas(req, res));
-
 // GET /api/graficos-padrao/biblioteca/verificar-servico/:servicoId
 router.get('/biblioteca/verificar-servico/:servicoId', (req, res) => controller.verificarServico(req, res));
 
