@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import path from 'path';
+import { readFileSync } from 'fs';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -15,6 +16,17 @@ import { iniciarAplicacao } from './bootstrap';
 
 const app: Express = express();
 const PORT = Number(process.env.PORT || process.env.APP_PORT || 3200);
+
+function versaoDoPacote(): string {
+  try {
+    const bruto = readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
+    const pkg = JSON.parse(bruto) as { version?: string };
+    if (pkg.version) return pkg.version;
+  } catch {
+    /* package.json fora do lugar esperado */
+  }
+  return 'unknown';
+}
 
 // A Render encaminha o cliente em X-Forwarded-For. Um salto só.
 app.set('trust proxy', 1);
@@ -59,7 +71,7 @@ app.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    version: '2.0-minio',
+    version: versaoDoPacote(),
     buildSha: process.env.BUILD_SHA || 'unknown',
     tag: process.env.IMAGE_TAG || process.env.TAG || 'unknown',
     multiTenant: isMultiTenant(),
