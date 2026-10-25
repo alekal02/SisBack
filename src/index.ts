@@ -67,7 +67,6 @@ import { ServicoController } from './controllers/ServicoController';
 import kpiUniversalRoutes from './routes/kpiUniversal';
 import graficosPadraoRoutes from './routes/graficosPadrao';
 import tipoServicoRoutes from './routes/tipoServico';
-import whatsappRoutes from './routes/whatsapp';
 import wuzapiRoutes from './routes/wuzapi';
 import salaTecnicaRoutes from './routes/salaTecnica';
 import pdfRoutes from './routes/pdf';
@@ -281,9 +280,6 @@ app.use('/api/graficos-padrao', authenticate, graficosPadraoRoutes);
 
 // PDF unificado
 app.use('/api/pdf', authenticate, pdfRoutes);
-
-// Rotas do WhatsApp Cloud API (Meta — outbound)
-app.use('/api/whatsapp', authenticate, whatsappRoutes);
 
 // WuzAPI — webhook (público) + mapeamento de grupos (autenticado)
 app.use('/api/wuzapi', wuzapiRoutes);
