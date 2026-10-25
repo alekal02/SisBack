@@ -1,0 +1,670 @@
+{
+  "kpis": [
+    {
+      "nome": "Viagens",
+      "label": "Viagens Realizadas",
+      "expressao": "VIAGENS_VALIDADAS()",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Total de viagens validadas no dashboard (linhas com KM, peso e rota completos)",
+      "unidade": "viagens",
+      "cor": "#14b8a6",
+      "categoria": "operacional",
+      "colunasUsadas": []
+    },
+    {
+      "nome": "Tonelagem Total",
+      "label": "Tonelagem Total",
+      "expressao": "SUM(PESO TOTAL) / 1000",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Peso total transportado em toneladas",
+      "unidade": "t",
+      "cor": "#6366f1",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "PESO TOTAL"
+      ]
+    },
+    {
+      "nome": "KM Rodados",
+      "label": "KM Rodados",
+      "expressao": "SUM(KM TOTAL)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Quilometragem total rodada no periodo",
+      "unidade": "km",
+      "cor": "#06b6d4",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "KM TOTAL"
+      ]
+    },
+    {
+      "nome": "Peso Total KG",
+      "label": "Peso Total (kg)",
+      "expressao": "SUM(PESO TOTAL)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Peso total coletado em quilogramas",
+      "unidade": "kg",
+      "cor": "#818cf8",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "PESO TOTAL"
+      ]
+    },
+    {
+      "nome": "Qtd Coletores",
+      "label": "Coletores Ativos",
+      "expressao": "COUNT DISTINCT(PLACA)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Quantidade de veiculos/coletores em operacao",
+      "unidade": "coletores",
+      "cor": "#a855f7",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "PLACA"
+      ]
+    },
+    {
+      "nome": "Motoristas Ativos",
+      "label": "Motoristas Ativos",
+      "expressao": "COUNT DISTINCT(MOTORISTA)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Quantidade de motoristas diferentes em operacao",
+      "unidade": "motoristas",
+      "cor": "#d946ef",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "MOTORISTA"
+      ]
+    },
+    {
+      "nome": "Total Coletores Equipe",
+      "label": "Total Coletores na Equipe",
+      "expressao": "COLETORES_UNICOS()",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Coletores únicos (COLETOR 01–04): mesma pessoa em várias viagens conta apenas uma vez",
+      "unidade": "coletores",
+      "cor": "#c084fc",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "N║ DE COLETORES"
+      ]
+    },
+    {
+      "nome": "Regionais",
+      "label": "Regionais Atendidas",
+      "expressao": "COUNT DISTINCT(REGIONAL)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Quantidade de regionais atendidas",
+      "unidade": "regionais",
+      "cor": "#f43f5e",
+      "categoria": "analise",
+      "colunasUsadas": [
+        "REGIONAL"
+      ]
+    },
+    {
+      "nome": "Distritos",
+      "label": "Distritos Atendidos",
+      "expressao": "COUNT DISTINCT(DISTRITO)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Quantidade de distritos atendidos",
+      "unidade": "distritos",
+      "cor": "#e11d48",
+      "categoria": "analise",
+      "colunasUsadas": [
+        "DISTRITO"
+      ]
+    },
+    {
+      "nome": "Media Peso Viagem",
+      "label": "Peso Medio por Viagem (kg)",
+      "expressao": "DIVIDE(SUM(PESO TOTAL), VIAGENS_POR_ROTA())",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Peso medio coletado por viagem em kg",
+      "unidade": "kg/viagem",
+      "cor": "#fb923c",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "PESO TOTAL"
+      ]
+    },
+    {
+      "nome": "Media Ton Viagem",
+      "label": "Tonelagem Media por Viagem",
+      "expressao": "DIVIDE(SUM(PESO TOTAL) / 1000, VIAGENS_POR_ROTA())",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Media de toneladas transportadas por viagem",
+      "unidade": "t/viagem",
+      "cor": "#f59e0b",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "PESO TOTAL"
+      ]
+    },
+    {
+      "nome": "Media Km Viagem",
+      "label": "KM Medio por Viagem",
+      "expressao": "DIVIDE(SUM(KM TOTAL), VIAGENS_POR_ROTA())",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Quilometragem media rodada por viagem",
+      "unidade": "km/viagem",
+      "cor": "#84cc16",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "KM TOTAL"
+      ]
+    },
+    {
+      "nome": "Ton/Km",
+      "label": "Eficiencia (Ton/Km)",
+      "expressao": "DIVIDE(SUM(PESO TOTAL) / 1000, SUM(KM TOTAL))",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Toneladas transportadas por quilometro rodado",
+      "unidade": "t/km",
+      "cor": "#22c55e",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "PESO TOTAL",
+        "KM TOTAL"
+      ]
+    },
+    {
+      "nome": "Produtividade por Coletor",
+      "label": "Média Ton/Coletor por Viagem",
+      "expressao": "MEDIA_TON_POR_COLETOR()",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Média de toneladas por coletor em cada viagem (PESO TOTAL ÷ Nº DE COLETORES)",
+      "unidade": "ton/coletor",
+      "cor": "#0ea5e9",
+      "categoria": "Frota",
+      "colunasUsadas": []
+    },
+    {
+      "nome": "Faturamento",
+      "label": "Faturamento Estimado",
+      "expressao": "FATURAMENTO_EST(PESO TOTAL, TIPO DE CAMINHÃO)",
+      "formato": "moeda",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Faturamento estimado baseado em peso x valor por tipo de caminhao",
+      "unidade": "R$",
+      "cor": "#059669",
+      "categoria": "financeiro",
+      "colunasUsadas": [
+        "PESO TOTAL",
+        "TIPO DE CAMINHÃO"
+      ]
+    },
+    {
+      "nome": "Receita/Km",
+      "label": "Receita por Km",
+      "expressao": "DIVIDE(FATURAMENTO_EST(PESO TOTAL, TIPO DE CAMINHÃO), SUM(KM TOTAL))",
+      "formato": "moeda",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Faturamento dividido pelos km rodados",
+      "unidade": "R$/km",
+      "cor": "#ec4899",
+      "categoria": "financeiro",
+      "colunasUsadas": [
+        "PESO TOTAL",
+        "TIPO DE CAMINHÃO"
+      ]
+    },
+    {
+      "nome": "Receita/Hora",
+      "label": "Receita por Hora",
+      "expressao": "DIVIDE(FATURAMENTO_EST(PESO TOTAL, TIPO DE CAMINHÃO), HORAS_PRODUTIVAS(HORA SAIDA BASE, HORA CHEGADA BASE))",
+      "formato": "moeda",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Faturamento dividido pelas horas produtivas (HORA CHEGADA BASE - HORA SAIDA BASE por registro, com correcao de virada de dia)",
+      "unidade": "R$/h",
+      "cor": "#f472b6",
+      "categoria": "financeiro",
+      "colunasUsadas": [
+        "PESO TOTAL",
+        "TIPO DE CAMINHÃO"
+      ]
+    },
+    {
+      "nome": "Horas Produtivas",
+      "label": "Horas Produtivas",
+      "expressao": "HORAS_PRODUTIVAS(HORA SAIDA BASE, HORA CHEGADA BASE)",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Total de horas em operacao - soma de (HORA CHEGADA BASE - HORA SAIDA BASE) por registro, com correcao de virada de dia",
+      "unidade": "h",
+      "cor": "#f97316",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "HORA SAIDA BASE",
+        "HORA CHEGADA BASE"
+      ]
+    },
+    {
+      "nome": "Total Viagens Contador",
+      "label": "Total de Viagens (Contador)",
+      "expressao": "VIAGENS_POR_ROTA()",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Soma do contador de viagens (rotas efetuadas)",
+      "unidade": "viagens",
+      "cor": "#2dd4bf",
+      "categoria": "operacional",
+      "colunasUsadas": [
+        "CONTADOR DE VIAGENS"
+      ]
+    },
+    {
+      "nome": "Peso por Coletor (kg)",
+      "label": "Ton/Coletor",
+      "expressao": "DIVIDE(SUM(PESO TOTAL) / 1000, PLACAS_UNICAS())",
+      "formato": "numero",
+      "agregacao": "sum",
+      "ativo": true,
+      "descricao": "Tonelagem total do ciclo dividida pelos caminhões ativos (placas distintas)",
+      "unidade": "ton/coletor",
+      "cor": "#8b5cf6",
+      "categoria": "Frota",
+      "colunasUsadas": []
+    }
+  ],
+  "graficos": [
+    {
+      "id": "padrao_tonelagem_por_veiculo_1780965346855",
+      "cor": "#3b82f6",
+      "key": "tonelagem_por_veiculo",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "PLACA",
+      "eixoY": "PESO TOTAL",
+      "ordem": 1,
+      "padrao": true,
+      "titulo": "Tonelagem por Veículo",
+      "categoria": "Operacional",
+      "descricao": "Peso total coletado em toneladas agrupado por veículo",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "CAMINHAO",
+          "PLACA",
+          "VEICULO",
+          "COLETOR"
+        ],
+        "eixoY": [
+          "PESO TOTAL",
+          "PESO",
+          "PESOTOTAL"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_km_por_veiculo_1780965346855",
+      "cor": "#06b6d4",
+      "key": "km_por_veiculo",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "PLACA",
+      "eixoY": "KM TOTAL",
+      "ordem": 2,
+      "padrao": true,
+      "titulo": "KM Rodados por Veículo",
+      "categoria": "Operacional",
+      "descricao": "Total de quilômetros rodados agrupado por veículo",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "CAMINHAO",
+          "PLACA",
+          "VEICULO",
+          "COLETOR"
+        ],
+        "eixoY": [
+          "KM TOTAL",
+          "KM",
+          "KMTOTAL",
+          "QUILOMETRO",
+          "DISTANCIA"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_faturamento_por_veiculo_1780965346855",
+      "cor": "#f59e0b",
+      "key": "faturamento_por_veiculo",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "PLACA",
+      "eixoY": "PESO TOTAL",
+      "ordem": 3,
+      "padrao": true,
+      "titulo": "Faturamento por Veículo",
+      "categoria": "Financeiro",
+      "descricao": "Faturamento estimado por veículo (peso × valor do contrato)",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "CAMINHAO",
+          "PLACA",
+          "VEICULO",
+          "COLETOR"
+        ],
+        "eixoY": [
+          "PESO TOTAL",
+          "PESO"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_receita_km_por_veiculo_1780965346855",
+      "cor": "#eab308",
+      "key": "receita_km_por_veiculo",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "PLACA",
+      "eixoY": "KM TOTAL",
+      "ordem": 4,
+      "padrao": true,
+      "titulo": "Receita por KM por Veículo",
+      "categoria": "Financeiro",
+      "descricao": "Faturamento dividido pelos KM rodados — rentabilidade por veículo",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "CAMINHAO",
+          "PLACA",
+          "VEICULO",
+          "COLETOR"
+        ],
+        "eixoY": [
+          "KM TOTAL",
+          "KM",
+          "KMTOTAL"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_distribuicao_tipo_caminhao_1780965346855",
+      "cor": "#8b5cf6",
+      "key": "distribuicao_tipo_caminhao",
+      "tipo": "pizza",
+      "ativo": true,
+      "eixoX": "TIPO DE CAMINHÃO",
+      "eixoY": "",
+      "ordem": 5,
+      "padrao": true,
+      "titulo": "Distribuição por Tipo de Caminhão",
+      "categoria": "Operacional",
+      "descricao": "Quantidade de viagens por tipo de caminhão",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "TIPO CAMINHAO",
+          "TIPO_CAMINHAO",
+          "CAMINHAO",
+          "TIPO",
+          "TIPO DE CAMINHAO"
+        ],
+        "eixoY": []
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_tonelagem_ao_longo_do_tempo_1780965346855",
+      "cor": "#22c55e",
+      "key": "tonelagem_ao_longo_do_tempo",
+      "tipo": "linha",
+      "ativo": true,
+      "eixoX": "DATA SAIDA",
+      "eixoY": "PESO TOTAL",
+      "ordem": 6,
+      "padrao": true,
+      "titulo": "Evolução da Tonelagem",
+      "categoria": "Temporal",
+      "descricao": "Peso total coletado ao longo do tempo",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "DATA SAIDA",
+          "DATA",
+          "DIA",
+          "DATA DE SAIDA"
+        ],
+        "eixoY": [
+          "PESO TOTAL",
+          "PESO",
+          "PESOTOTAL"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_km_ao_longo_do_tempo_1780965346855",
+      "cor": "#06b6d4",
+      "key": "km_ao_longo_do_tempo",
+      "tipo": "linha",
+      "ativo": true,
+      "eixoX": "DATA SAIDA",
+      "eixoY": "KM TOTAL",
+      "ordem": 7,
+      "padrao": true,
+      "titulo": "Evolução dos KM Rodados",
+      "categoria": "Temporal",
+      "descricao": "KM rodados ao longo do tempo",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "DATA SAIDA",
+          "DATA",
+          "DIA",
+          "DATA DE SAIDA"
+        ],
+        "eixoY": [
+          "KM TOTAL",
+          "KM",
+          "KMTOTAL",
+          "QUILOMETRO",
+          "DISTANCIA"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_horas_produtivas_por_veiculo_1780965346855",
+      "cor": "#f97316",
+      "key": "horas_produtivas_por_veiculo",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "PLACA",
+      "eixoY": "HORA SÁIDA BASE",
+      "ordem": 8,
+      "padrao": true,
+      "titulo": "Horas Produtivas por Veículo",
+      "categoria": "Produtividade",
+      "descricao": "Total de horas produtivas agrupado por veículo (soma de horas)",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "CAMINHAO",
+          "PLACA",
+          "VEICULO",
+          "COLETOR"
+        ],
+        "eixoY": [
+          "HORA SAIDA BASE",
+          "HORA SAIDA",
+          "HORA SÁIDA BASE",
+          "HORASAIDABASE"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_produtividade_por_coletor_1780965346855",
+      "cor": "#14b8a6",
+      "key": "produtividade_por_coletor",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "MOTORISTA",
+      "eixoY": "PESO TOTAL",
+      "ordem": 9,
+      "padrao": true,
+      "titulo": "Produtividade por Motorista",
+      "categoria": "Produtividade",
+      "descricao": "Tonelagem coletada por motorista/coletor",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "MOTORISTA",
+          "NOME",
+          "COLETOR",
+          "OPERADOR"
+        ],
+        "eixoY": [
+          "PESO TOTAL",
+          "PESO"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_tonelada_km_por_veiculo_1780965346855",
+      "cor": "#6366f1",
+      "key": "tonelada_km_por_veiculo",
+      "tipo": "barra",
+      "ativo": true,
+      "eixoX": "PLACA",
+      "eixoY": "KM TOTAL",
+      "ordem": 10,
+      "padrao": true,
+      "titulo": "Tonelada por KM por Veículo",
+      "categoria": "Eficiencia",
+      "descricao": "Relação peso/KM — eficiência de carga por distância por veículo",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "CAMINHAO",
+          "PLACA",
+          "VEICULO",
+          "COLETOR"
+        ],
+        "eixoY": [
+          "KM TOTAL",
+          "KM",
+          "KMTOTAL"
+        ]
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_distribuicao_por_motorista_1780965346855",
+      "cor": "#a855f7",
+      "key": "distribuicao_por_motorista",
+      "tipo": "pizza",
+      "ativo": true,
+      "eixoX": "MOTORISTA",
+      "eixoY": "",
+      "ordem": 11,
+      "padrao": true,
+      "titulo": "Viagens por Motorista",
+      "categoria": "Operacional",
+      "descricao": "Quantidade de viagens por motorista",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "MOTORISTA",
+          "NOME",
+          "COLETOR",
+          "OPERADOR"
+        ],
+        "eixoY": []
+      },
+      "placeholderNaoResolvido": false
+    },
+    {
+      "id": "padrao_distribuicao_por_regional_1780965346855",
+      "cor": "#ec4899",
+      "key": "distribuicao_por_regional",
+      "tipo": "pizza",
+      "ativo": true,
+      "eixoX": "REGIONAL",
+      "eixoY": "",
+      "ordem": 12,
+      "padrao": true,
+      "titulo": "Distribuição por Regional",
+      "categoria": "Geográfico",
+      "descricao": "Quantidade de viagens por regional/distrito",
+      "automatico": true,
+      "reResolvido": true,
+      "reResolvidoEm": "2026-06-09T02:58:02.214Z",
+      "placeholdersOriginais": {
+        "eixoX": [
+          "REGIONAL",
+          "REGIAO",
+          "DISTRITO",
+          "SETOR",
+          "ROTA"
+        ],
+        "eixoY": []
+      },
+      "placeholderNaoResolvido": false
+    }
+  ]
+}

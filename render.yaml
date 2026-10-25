@@ -1,0 +1,14 @@
+# Web Service Node nativo. Sem Docker.
+# Segredos (JWT, banco, tokens) entram pelo painel ou pela API da Render, não neste arquivo.
+services:
+  - type: web
+    name: sistemma-api
+    runtime: node
+    repo: https://github.com/alekal02/SisBack
+    branch: main
+    plan: starter
+    region: oregon
+    autoDeploy: true
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
