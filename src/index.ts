@@ -79,7 +79,6 @@ import tipoServicoRoutes from './routes/tipoServico';
 import wuzapiRoutes from './routes/wuzapi';
 import salaTecnicaRoutes from './routes/salaTecnica';
 import pdfRoutes from './routes/pdf';
-import { pdfController } from './controllers/PdfController';
 import { DashboardExecutivoController } from './controllers/DashboardExecutivoController';
 import { ModeloExecutivoController } from './controllers/ModeloExecutivoController';
 import { registrarControllerExecutivo } from './services/executivoCacheWarmupService';
@@ -306,12 +305,6 @@ app.get('/api/dashboard/servicos-por-tipo', authenticate, (req, res) => servicoC
 app.get('/api/dashboard/comparar-por-tipo', authenticate, (req, res) => servicoCtrl.getCompararKpisGlobal(req, res));
 app.get('/api/dashboard/qualidade-ideal-3d', authenticate, (req, res) => servicoCtrl.getQualidadeIdeal3d(req, res));
 app.get('/api/dashboard/evolucao-operacional', authenticate, (req, res) => servicoCtrl.getEvolucaoOperacional(req, res));
-
-// Rota de geração de PDF (legado) — delega ao endpoint unificado
-app.post('/api/generate-pdf', authenticate, (req, res) => {
-  if (!req.body.margin) req.body.margin = 'default';
-  return pdfController.generate(req, res);
-});
 
 // Middleware de erro global
 app.use((err: Error & { status?: number; statusCode?: number; type?: string }, req: Request, res: Response, _next: NextFunction) => {

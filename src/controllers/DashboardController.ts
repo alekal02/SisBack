@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { pdfController } from './PdfController';
 import { Between, Repository } from 'typeorm';
 import { startOfDay, endOfDay, subDays } from 'date-fns';
 import AppDataSource from '../database/data-source';
@@ -151,14 +150,6 @@ export class DashboardController {
       console.error('Erro ao buscar dados dos gráficos:', error);
       res.status(500).json({ error: 'Erro ao carregar dados dos gráficos' });
     }
-  }
-
-  /**
-   * POST /api/dashboard/generate-pdf (legado — margem full para dashboards)
-   */
-  async generatePdf(req: Request, res: Response): Promise<void> {
-    if (!req.body.margin) req.body.margin = 'full';
-    return pdfController.generate(req, res);
   }
 
   /**

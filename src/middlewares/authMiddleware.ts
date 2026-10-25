@@ -204,8 +204,6 @@ export function authenticate(
   // GET /api/contracts/:contractId/servicos/:id/relatorio-dia-operacao
   // POST /api/pdf/generate
   // POST /api/dashboard/executivo/pdf
-  // POST /api/dashboard/generate-pdf
-  // POST /api/generate-pdf
   const token = extrairBearer(req);
 
   if (!token) {
