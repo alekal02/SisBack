@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import AppDataSource from '../database/data-source';
 import { ColetaData } from '../entities/ColetaData';
 import { PlanilhaUpload } from '../entities/PlanilhaUpload';
@@ -851,14 +851,17 @@ export class DeduplicacaoService {
     const linhasIgnoradasRegistro: LinhaIgnoradaRegistro[] = [];
     const chavesNoArquivo = new Set<string>();
 
-    // 3. Identificar registros a excluir (se estratégia = substituir)
-    if (estrategia === 'substituir' && analise.conflitantes.length > 0) {
-      const idsExcluir = analise.conflitantes
-        .map(c => (c.dadosBanco as ColetaData)?.id)
-        .filter(Boolean);
-      if (idsExcluir.length > 0) {
-        await this.coletaRepo.delete({ id: In(idsExcluir) });
-      }
+    if (servicoId) {
+      const datasDoArquivo = [...new Set(
+        [...analise.novos, ...analise.duplicados, ...analise.conflitantes]
+          .map((item) => (
+            item.dadosPlanilha?.dataSaida instanceof Date
+              ? item.dadosPlanilha.dataSaida.toISOString().slice(0, 10)
+              : null
+          ))
+          .filter((d): d is string => !!d),
+      )];
+      await apagarDatasDeUploadsAbertos(servicoId, datasDoArquivo);
     }
 
     // 4. Processar registros
@@ -898,8 +901,12 @@ export class DeduplicacaoService {
       return coleta;
     };
 
-    // Processar NOVOS
-    for (const item of analise.novos) {
+    const linhasDoArquivo = [
+      ...analise.novos,
+      ...analise.duplicados,
+      ...analise.conflitantes,
+    ];
+    for (const item of linhasDoArquivo) {
       try {
         const coleta = criarColetaSeValida(item.dadosPlanilha);
         if (!coleta) {
@@ -916,39 +923,7 @@ export class DeduplicacaoService {
         erros++;
       }
     }
-
-    // Processar CONFLITANTES (apenas se estratégia = substituir)
-    if (estrategia === 'substituir') {
-      for (const item of analise.conflitantes) {
-        try {
-          const coleta = criarColetaSeValida(item.dadosPlanilha);
-          if (!coleta) {
-            ignorados++;
-            continue;
-          }
-          batch.push(coleta);
-          substituidos++;
-          importados++;
-          if (batch.length >= BATCH_SIZE) {
-            await this.coletaRepo.save(batch);
-            batch.length = 0;
-          }
-        } catch (err) {
-          erros++;
-        }
-      }
-    } else {
-      ignorados += analise.conflitantes.length;
-    }
-
-    // Processar DUPLICADOS
-    ignorados += analise.duplicados.length;
-    for (const item of analise.duplicados) {
-      linhasIgnoradasRegistro.push({
-        linhaExcel: item.dadosPlanilha.linhaExcel,
-        motivo: 'já estavam no sistema',
-      });
-    }
+    substituidos = analise.duplicados.length + analise.conflitantes.length;
     await gravarLinhasIgnoradas(uploadSalvo.id, linhasIgnoradasRegistro);
 
     // Salvar lote final

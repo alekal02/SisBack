@@ -9,7 +9,12 @@ import { classificarPlanilhaContrato } from './planilhaContratoClassifier';
 import { prepararViagemParaImportacao } from './validacaoViagemService';
 import { obterPesoTotalRegistro } from './viagensPorRotaService';
 import { calcularHorasProdutivasTotal } from './horasProdutivasService';
-import { calcularMetricaExecutivaDeDados } from './metricaExecutivaService';
+import {
+  agregarMetricasExecutivas,
+  calcularMetricaExecutivaDeDados,
+  metricaExecutivaNoContrato,
+} from './metricaExecutivaService';
+import { TipoServico } from '../enums/TipoServico';
 import { analiseOperacaoDeAgregacaoSql } from './relatorioDia/operacaoDia';
 import { agruparViagensPesoPorLinha, montarViagensPesoDoRegistro } from './viagemPesoRotaService';
 import PlanilhaService from './PlanilhaService';
@@ -338,6 +343,65 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
       }
     }
     assert.equal(diffs.length, 0, diffs.join('; '));
+  });
+
+  it('executivo do contrato: viagens e km/viagem só da coleta', () => {
+    const r = importarColetaComoUpload(coletaBuf);
+    const brutos = (PlanilhaService as unknown as {
+      converterColetasParaBrutos: (d: ColetaData[], apenasValidos: boolean) => Record<string, unknown>[];
+    }).converterColetasParaBrutos(r.importadas, true);
+    const coleta = calcularMetricaExecutivaDeDados(brutos, {}, 'coleta-aparecida');
+    const producao = {
+      ...coleta,
+      viagens: 7190,
+      viagensComKmValido: 7190,
+      kmTotal: 200000,
+      pesoTotalTon: 0,
+      tonComKmValido: 0,
+      kmMedioViagem: 27.82,
+    };
+    const tiposProducao = [
+      TipoServico.ROCADEIRA,
+      TipoServico.VARRICAO,
+      TipoServico.REMOCAO,
+      TipoServico.GERAL,
+      TipoServico.PODA,
+    ];
+    const aparecida = agregarMetricasExecutivas([
+      metricaExecutivaNoContrato(TipoServico.COLETA_CAMINHAO, coleta),
+      ...tiposProducao.map((tipo) => metricaExecutivaNoContrato(tipo, producao)),
+    ], coleta.qtdColetores);
+    assert.equal(aparecida.viagens, 1539);
+    assert.equal(aparecida.kmMedioViagem, 61.63);
+    assert.equal(aparecida.pesoTotalTon, 11069.39);
+
+    const unaiColeta = {
+      ...coleta,
+      viagens: 176,
+      viagensComKmValido: 176,
+      kmTotal: 8057.28,
+      pesoTotalTon: 1159.24,
+      tonComKmValido: 1159.24,
+    };
+    const unai = agregarMetricasExecutivas([
+      metricaExecutivaNoContrato(TipoServico.COLETA_CAMINHAO, unaiColeta),
+      metricaExecutivaNoContrato(TipoServico.ROCADEIRA, producao),
+      metricaExecutivaNoContrato(TipoServico.GERAL, producao),
+    ], 0);
+    assert.equal(unai.viagens, 176);
+    assert.equal(unai.kmMedioViagem, 45.78);
+  });
+
+  it('conferência avisa serviço Feiras criado', () => {
+    const conf = montarConferencia({
+      nome: 'Produção',
+      registros: [{ dataSaida: new Date('2026-10-01T12:00:00Z'), dados: { _modeloPlanilha: 'consolidado_producao', _tipoServico: 'geral' } }],
+      ignoradas: [],
+      lidas: 1,
+      modelo: 'consolidado_producao',
+      servicosCriados: ['Feiras'],
+    });
+    assert.match(conf.mensagem, /serviço Feiras criado/);
   });
 
   it('produção: ciclo dia 25, repetidas e totais por serviço', () => {

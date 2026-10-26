@@ -4,6 +4,7 @@ import { contarViagensPorRotaRegistro, contarViagensValidadas } from './viagensP
 import { calcularMediaTonPorColetorViagem } from './coletoresUnicosService';
 import { resolverValorUnitarioPorTipo } from '../config/pesoMaximoCaminhao';
 import { fecharRazaoKm, kmInformadoValido } from './kmValido';
+import { TipoServico } from '../enums/TipoServico';
 
 export function detectarColuna(dados: Record<string, unknown>[], candidatos: string[]): string {
   if (!dados || dados.length === 0) return '';
@@ -171,6 +172,46 @@ export function calcularMetricaExecutivaDeDados(
     temValor,
     colunasDetectadas,
   };
+}
+
+/** No executivo do contrato, só coleta de caminhão entra em viagem e em km/viagem. */
+export function servicoContaViagemNoExecutivo(tipo: string | null | undefined): boolean {
+  return String(tipo || '') === TipoServico.COLETA_CAMINHAO;
+}
+
+/**
+ * Tira viagem e km de roçada, varrição, entulho, feiras, poda e dos demais serviços.
+ * A tonelagem do serviço permanece.
+ */
+export function metricaExecutivaNoContrato(
+  tipoServico: string | null | undefined,
+  metrica: MetricaExecutivaCalc,
+): MetricaExecutivaCalc {
+  if (servicoContaViagemNoExecutivo(tipoServico)) return metrica;
+  return {
+    ...metrica,
+    viagens: 0,
+    viagensComKmValido: 0,
+    kmTotal: 0,
+    kmMedioViagem: 0,
+    pctViagensKmValido: 0,
+    tonComKmValido: 0,
+    tonKm: 0,
+  };
+}
+
+/** Linha de planilha de produção não é viagem de coleta. */
+export function registroEhLinhaDeColeta(row: {
+  dados?: Record<string, unknown> | null;
+} | Record<string, unknown> | null | undefined): boolean {
+  if (!row) return false;
+  const bruto = row as { dados?: Record<string, unknown> | null };
+  const dados = bruto.dados && typeof bruto.dados === 'object' ? bruto.dados : (row as Record<string, unknown>);
+  const modelo = String(dados._modeloPlanilha || '');
+  const tipo = String(dados._tipoServico || '');
+  if (modelo && modelo !== 'coleta') return false;
+  if (tipo && tipo !== TipoServico.COLETA_CAMINHAO) return false;
+  return true;
 }
 
 export function agregarMetricasExecutivas(

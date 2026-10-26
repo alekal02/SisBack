@@ -16,6 +16,7 @@ import {
   calcularMetricaExecutivaDeDados,
   agregarMetricasExecutivas,
   detectarTodasColunas,
+  metricaExecutivaNoContrato,
   MetricaExecutivaCalc,
 } from './metricaExecutivaService';
 import {
@@ -275,11 +276,11 @@ export async function calcularIndicadoresExecutivoUnificado(opts: {
   for (const r of resultadosAnterior) r.coletores.forEach(c => coletoresAnterior.add(c));
 
   const metricasAtual = agregarMetricasExecutivas(
-    resultadosAtual.map(r => r.metricas),
+    resultadosAtual.map((r, i) => metricaExecutivaNoContrato(servicos[i]?.tipo, r.metricas)),
     coletoresAtual.size,
   );
   const metricasAnterior = agregarMetricasExecutivas(
-    resultadosAnterior.map(r => r.metricas),
+    resultadosAnterior.map((r, i) => metricaExecutivaNoContrato(servicos[i]?.tipo, r.metricas)),
     coletoresAnterior.size,
   );
 

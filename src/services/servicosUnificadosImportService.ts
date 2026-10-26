@@ -19,6 +19,7 @@ import { agendarWarmupPosUpload } from './executivoCacheWarmupService';
 import { gerarConfigGraficosPadrao, reResolverGraficos } from './graficosPadrao';
 import { converterKpisParaConfig } from './TipoServicoTemplateService';
 import {
+  garantirServicoNomeadoContrato,
   garantirServicosPadraoContrato,
   TIPOS_SERVICO_PADRAO_UNIFICADO,
 } from './servicosPadraoContratoService';
@@ -63,6 +64,7 @@ export interface ResultadoImportServicosUnificados {
   consolidacao?: { uploadsRemovidos: number; uploadsRemovidosIds: number[] };
   viagensValidasDashboard: number;
   viagensInconsistentes: number;
+  servicosCriados?: string[];
 }
 
 class ServicosUnificadosImportService {
@@ -148,6 +150,7 @@ class ServicosUnificadosImportService {
     totalLinhasBrutas: number;
     abasUsadas: string[];
     buffer: Buffer;
+    servicoRecemCriado?: boolean;
   }): Promise<ResultadoImportUnificadoServico & {
     datasApagadas: { data: string; registrosRemovidos: number }[];
     uploadsRemovidosIds: number[];
@@ -155,7 +158,7 @@ class ServicosUnificadosImportService {
     datasIgnoradasCicloFechado: string[];
     ignoradasDuplicadas: number;
   }> {
-    const { servico, linhas: linhasBrutas, nomeArquivo, usuarioId, substituirPorData, totalLinhasBrutas, abasUsadas, buffer } = opts;
+    const { servico, linhas: linhasBrutas, nomeArquivo, usuarioId, substituirPorData, totalLinhasBrutas, abasUsadas, buffer, servicoRecemCriado } = opts;
     const datasTodas = [...new Set(
       linhasBrutas
         .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
@@ -193,14 +196,12 @@ class ServicosUnificadosImportService {
     const servicoRepo = manager.getRepository(Servico);
     const tipoSistema = linhas[0].tipoSistema;
     const datasApagadas: { data: string; registrosRemovidos: number }[] = [];
-    if (substituirPorData) {
-      const datas = [...new Set(
-        linhas
-          .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
-          .filter((d): d is string => !!d),
-      )];
-      datasApagadas.push(...await apagarDatasDeUploadsAbertos(servico.id, datas, manager));
-    }
+    const datas = [...new Set(
+      linhas
+        .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
+        .filter((d): d is string => !!d),
+    )];
+    datasApagadas.push(...await apagarDatasDeUploadsAbertos(servico.id, datas, manager));
 
     const existentes = await carregarChavesProducaoExistentes(servico.id, manager);
     const { novas, ignoradas: ignoradasDuplicadas, repetidasNoArquivo, jaNoSistema } = filtrarColetasProducaoNovas(
@@ -302,6 +303,7 @@ class ServicosUnificadosImportService {
       substituidos: uploadSalvo.linhasSubstituidas,
       viagensValidasDashboard: importados,
       modelo: 'servicos_unificados',
+      ...(servicoRecemCriado ? { servicosCriados: [servico.nome] } : {}),
       consolidacao: {
         registrosRemovidosAusentes: 0,
         uploadsRemovidos: uploadsRemovidosIds.length,
@@ -478,23 +480,20 @@ class ServicosUnificadosImportService {
     let ignoradasDuplicadasTotal = 0;
     let primeiroUploadId = 0;
 
-    const tiposDisponiveisNoContrato = [...new Set(
-      irmaos
-        .filter((s) => TIPOS_ACEITA_UNIFICADO.has(String(s.tipo)))
-        .map((s) => `${s.nome} (${s.tipo})`),
-    )];
-
+    const servicosCriados: string[] = [];
     for (const [tipo, linhasTipo] of porTipoMap) {
-      const alvo = this.resolverAlvoPorTipo(servico, tipo, irmaos);
+      let alvo = this.resolverAlvoPorTipo(servico, tipo, irmaos);
+      let criado = false;
       if (!alvo) {
-        tiposSemServico.push({ tipoSistema: tipo, registros: linhasTipo.length });
-        avisos.push(
-          `${linhasTipo.length} registro(s) de "${tipo}" na CONSOLIDADO sem serviço desse tipo no contrato — ignorados.`
-          + (tiposDisponiveisNoContrato.length
-            ? ` Serviços disponíveis: ${tiposDisponiveisNoContrato.join(', ')}.`
-            : ' Cadastre no contrato um serviço com esse tipo.'),
-        );
-        continue;
+        const nome = String(linhasTipo[0]?.tipoLabel || tipo).trim() || String(tipo);
+        const garantido = await garantirServicoNomeadoContrato(servico.contract_id, nome, tipo);
+        alvo = garantido.servico;
+        criado = garantido.criado;
+        irmaos.push(alvo);
+        if (criado) {
+          avisos.push(`serviço ${alvo.nome} criado`);
+          servicosCriados.push(alvo.nome);
+        }
       }
 
       if (tipo === TipoServico.ROCADEIRA) {
@@ -520,6 +519,7 @@ class ServicosUnificadosImportService {
         totalLinhasBrutas: parsed.totalLinhasBrutas,
         abasUsadas: parsed.abasUsadas,
         buffer,
+        servicoRecemCriado: criado,
       });
 
       splitPorServico.push({
@@ -577,6 +577,7 @@ class ServicosUnificadosImportService {
       },
       viagensValidasDashboard: importados,
       viagensInconsistentes: 0,
+      servicosCriados,
     };
   }
 

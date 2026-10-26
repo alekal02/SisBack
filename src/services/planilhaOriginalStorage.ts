@@ -1,10 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 import { EntityManager } from 'typeorm';
 import AppDataSource from '../database/data-source';
 import { PlanilhaUpload } from '../entities/PlanilhaUpload';
 import { Servico } from '../entities/Servico';
-import FileStorageService from './FileStorageService';
 import { slugificarContrato } from '../utils/slugContrato';
 import {
   calcularCicloMensalContrato,
@@ -14,6 +14,30 @@ import {
 } from '../utils/periodoCicloContrato';
 
 export type OrigemPlanilhaUpload = 'whatsapp' | 'web';
+
+type ExecutarSql = (sql: string, params?: unknown[]) => Promise<unknown>;
+
+/** Grava o arquivo original em arquivos_storage e devolve a url db://arquivos/... */
+export async function gravarEmArquivosStorage(
+  caminho: string,
+  buffer: Buffer,
+  mime: string,
+  executar: ExecutarSql = (sql, params) => AppDataSource.query(sql, params),
+): Promise<string> {
+  if (!buffer?.length) throw new Error('Arquivo original da planilha está vazio.');
+  const pathNorm = String(caminho || '').replace(/^\/+/, '').replace(/\\/g, '/');
+  if (!pathNorm || pathNorm.includes('..')) throw new Error('Caminho do arquivo original inválido.');
+  await executar(
+    `INSERT INTO arquivos_storage (id, caminho, content_type, tamanho, conteudo)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (caminho) DO UPDATE
+       SET content_type = EXCLUDED.content_type,
+           tamanho = EXCLUDED.tamanho,
+           conteudo = EXCLUDED.conteudo`,
+    [crypto.randomUUID(), pathNorm, mime || 'application/octet-stream', buffer.length, buffer],
+  );
+  return `db://arquivos/${pathNorm}`;
+}
 
 function mimePlanilha(nomeArquivo: string): string {
   const ext = path.extname(nomeArquivo).toLowerCase();
@@ -55,7 +79,9 @@ export async function persistirArquivoOriginalUpload(
   dataOperacao?: string | null,
   manager?: EntityManager,
 ): Promise<string | null> {
-  if (!uploadId || !buffer?.length) return null;
+  if (!uploadId || !buffer?.length) {
+    throw new Error('Arquivo original da planilha não foi gravado.');
+  }
   try {
     const mime = mimePlanilha(nomeArquivo);
     const ext = extensaoPlanilha(nomeArquivo);
@@ -76,6 +102,7 @@ export async function persistirArquivoOriginalUpload(
       diaInicio = normalizarDiaInicioCiclo(servico?.contract?.diaInicioCiclo);
     }
 
+    const query = (sql: string, params?: unknown[]) => repos.query(sql, params);
     let url: string;
     if (numeroContrato) {
       const ref = inferirMesReferenciaDeData(dataIso, diaInicio);
@@ -87,22 +114,20 @@ export async function persistirArquivoOriginalUpload(
         ext,
         dataDiario: dataIso,
       });
-      await FileStorageService.uploadEmPath(paths.consolidado, buffer, mime, `consolidado${ext}`);
-      url = await FileStorageService.uploadEmPath(
-        paths.diario as string,
-        buffer,
-        mime,
-        nomeArquivo,
-      );
+      await gravarEmArquivosStorage(paths.consolidado, buffer, mime, query);
+      url = await gravarEmArquivosStorage(paths.diario as string, buffer, mime, query);
     } else {
-      url = await FileStorageService.uploadArquivo(buffer, nomeArquivo, mime);
+      url = await gravarEmArquivosStorage(`planilhas/${crypto.randomUUID()}${ext}`, buffer, mime, query);
+    }
+    if (!url.startsWith('db://arquivos/')) {
+      throw new Error('Arquivo original não vinculado em arquivos_storage.');
     }
 
     await repos.getRepository(PlanilhaUpload).update(uploadId, { urlDownload: url });
     return url;
   } catch (err) {
-    console.warn('[planilhaOriginal] Falha ao guardar arquivo original no MinIO:', err);
-    return null;
+    console.warn('[planilhaOriginal] Falha ao guardar arquivo original em arquivos_storage:', err);
+    throw err;
   }
 }
 

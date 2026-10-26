@@ -202,14 +202,12 @@ class RocadaImportService {
     const uploadRepo = manager.getRepository(PlanilhaUpload);
     const servicoRepo = manager.getRepository(Servico);
     const datasApagadas: { data: string; registrosRemovidos: number }[] = [];
-    if (substituirPorData) {
-      const datas = [...new Set(
-        linhas
-          .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
-          .filter((d): d is string => !!d),
-      )];
-      datasApagadas.push(...await apagarDatasDeUploadsAbertos(servicoId, datas, manager));
-    }
+    const datas = [...new Set(
+      linhas
+        .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
+        .filter((d): d is string => !!d),
+    )];
+    datasApagadas.push(...await apagarDatasDeUploadsAbertos(servicoId, datas, manager));
 
     const existentes = await carregarChavesProducaoExistentes(servicoId, manager);
     const { novas, ignoradas: ignoradasDuplicadas, repetidasNoArquivo, jaNoSistema } = filtrarColetasProducaoNovas(

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'path';
 import {
   escolherUploadParaBackup,
+  gravarEmArquivosStorage,
   nomeArquivoBackupCiclo,
   pastaDestinoBackupCiclo,
   pathMinioCicloContrato,
@@ -81,6 +82,34 @@ describe('pathMinioCicloContrato', () => {
     });
     assert.equal(p.consolidado, 'contratos/ap/ciclo-2026-08-25_2026-09-24/consolidado.xlsm');
     assert.equal(p.diario, 'contratos/ap/ciclo-2026-08-25_2026-09-24/diario/2026-09-16.xlsm');
+  });
+});
+
+describe('arquivo original em arquivos_storage', () => {
+  it('grava o buffer e devolve url db://arquivos para tela e WhatsApp', async () => {
+    const buffer = Buffer.from('planilha-original');
+    const chamadas: Array<{ sql: string; params: unknown[] }> = [];
+    const url = await gravarEmArquivosStorage(
+      'contratos/ap/ciclo-2026-09-25_2026-10-24/diario/2026-10-23.xlsx',
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      async (sql, params) => {
+        chamadas.push({ sql, params: params || [] });
+      },
+    );
+    assert.equal(url, 'db://arquivos/contratos/ap/ciclo-2026-09-25_2026-10-24/diario/2026-10-23.xlsx');
+    assert.equal(chamadas.length, 1);
+    assert.match(chamadas[0].sql, /INSERT INTO arquivos_storage/);
+    assert.equal(chamadas[0].params[1], 'contratos/ap/ciclo-2026-09-25_2026-10-24/diario/2026-10-23.xlsx');
+    assert.equal(chamadas[0].params[3], buffer.length);
+    assert.equal(chamadas[0].params[4], buffer);
+  });
+
+  it('recusa planilha vazia', async () => {
+    await assert.rejects(
+      () => gravarEmArquivosStorage('planilhas/vazia.xlsx', Buffer.alloc(0), 'application/octet-stream', async () => {}),
+      /vazio/,
+    );
   });
 });
 

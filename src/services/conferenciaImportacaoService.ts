@@ -51,7 +51,7 @@ export interface TotalServicoConferencia {
 }
 
 export interface AlertaConferencia {
-  codigo: 'hodometro' | 'placa' | 'formula_peso' | 'consolidado';
+  codigo: 'hodometro' | 'placa' | 'formula_peso' | 'consolidado' | 'servico_criado';
   texto: string;
   quantidade: number;
   linhas: number[];
@@ -82,6 +82,7 @@ export interface AlertasArquivo {
   consolidadoDesatualizado: boolean;
   dataConsolidado: string | null;
   dataAbasServico: string | null;
+  servicosCriados?: string[];
 }
 
 function round2(n: number): number {
@@ -287,6 +288,7 @@ export function montarConferencia(opts: {
   modelo?: string | null;
   formulaPesoTotalVazia?: number[];
   consolidadoDesatualizado?: boolean;
+  servicosCriados?: string[];
 }): ConferenciaImportacao {
   const modelo = opts.modelo || null;
   const producaoPorModelo = !!modelo && modelo !== 'coleta';
@@ -309,6 +311,16 @@ export function montarConferencia(opts: {
       quantidade: 1,
       linhas: [],
       texto: 'CONSOLIDADO possivelmente desatualizado',
+    });
+  }
+  for (const nome of opts.servicosCriados || []) {
+    const limpo = String(nome || '').trim();
+    if (!limpo) continue;
+    alertas.push({
+      codigo: 'servico_criado',
+      quantidade: 1,
+      linhas: [],
+      texto: `serviço ${limpo} criado`,
     });
   }
   let totaisColeta: ConferenciaImportacao['totaisColeta'] = null;
@@ -579,9 +591,17 @@ export async function gravarAlertasArquivo(planilhaUploadId: number, buffer: Buf
       conflitantes: 0,
       substituidos: upload.linhasSubstituidas || 0,
     }),
-    alertasArquivo: alertas,
+    alertasArquivo: {
+      ...alertas,
+      servicosCriados: servicosCriadosDoResumo(upload.resumo),
+    },
   };
   await repo.save(upload);
+}
+
+function servicosCriadosDoResumo(resumo: PlanilhaUpload['resumo']): string[] {
+  const lista = resumo?.servicosCriados;
+  return Array.isArray(lista) ? lista.map((nome) => String(nome).trim()).filter(Boolean) : [];
 }
 
 export async function gravarAlertasArquivoEm(ids: number[], buffer: Buffer): Promise<void> {
@@ -599,7 +619,10 @@ export async function gravarAlertasArquivoEm(ids: number[], buffer: Buffer): Pro
         conflitantes: 0,
         substituidos: upload.linhasSubstituidas || 0,
       }),
-      alertasArquivo: alertas,
+      alertasArquivo: {
+        ...alertas,
+        servicosCriados: servicosCriadosDoResumo(upload.resumo),
+      },
     };
     await repo.save(upload);
   }
@@ -655,6 +678,7 @@ export async function conferenciaDoUpload(planilhaUploadId: number): Promise<Con
     modelo,
     formulaPesoTotalVazia: alertas?.formulaPesoTotalVazia || [],
     consolidadoDesatualizado: !!alertas?.consolidadoDesatualizado,
+    servicosCriados: alertas?.servicosCriados || servicosCriadosDoResumo(upload.resumo),
   });
 }
 

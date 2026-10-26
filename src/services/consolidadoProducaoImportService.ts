@@ -77,6 +77,7 @@ export interface ResultadoImportConsolidadoProducao {
   consolidacao?: { uploadsRemovidos: number; uploadsRemovidosIds: number[] };
   viagensValidasDashboard: number;
   viagensInconsistentes: number;
+  servicosCriados?: string[];
 }
 
 class ConsolidadoProducaoImportService {
@@ -167,6 +168,7 @@ class ConsolidadoProducaoImportService {
     totalLinhasBrutas: number;
     abasUsadas: string[];
     buffer: Buffer;
+    servicoRecemCriado?: boolean;
   }): Promise<ResultadoImportConsolidadoServico & {
     datasApagadas: { data: string; registrosRemovidos: number }[];
     uploadsRemovidosIds: number[];
@@ -179,7 +181,7 @@ class ConsolidadoProducaoImportService {
     diasIguais?: number;
     datasAlteradas?: string[];
   }> {
-    const { servico, linhas: linhasBrutas, nomeArquivo, usuarioId, substituirPorData, totalLinhasBrutas, abasUsadas, buffer } = opts;
+    const { servico, linhas: linhasBrutas, nomeArquivo, usuarioId, substituirPorData, totalLinhasBrutas, abasUsadas, buffer, servicoRecemCriado } = opts;
     const datasTodas = [...new Set(
       linhasBrutas
         .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
@@ -281,8 +283,12 @@ class ConsolidadoProducaoImportService {
         return Boolean(data && regravarSet.has(data));
       });
       hashesRegravar = decisao.regravar.map((data) => ({ data, hash: hashesPlanilha.get(data)! }));
-      datasApagadas.push(...await apagarDatasDeUploadsAbertos(servico.id, decisao.regravar, manager));
     }
+
+    const datasDoUpload = [...new Set(
+      linhasTrabalho.map((linha) => isoDataLinha(linha)).filter((d): d is string => !!d),
+    )];
+    datasApagadas.push(...await apagarDatasDeUploadsAbertos(servico.id, datasDoUpload, manager));
 
     const existentes = await carregarChavesProducaoExistentes(servico.id, manager);
     const {
@@ -398,6 +404,7 @@ class ConsolidadoProducaoImportService {
       substituidos: uploadSalvo.linhasSubstituidas,
       viagensValidasDashboard: importados,
       modelo: 'consolidado_producao',
+      ...(servicoRecemCriado ? { servicosCriados: [servico.nome] } : {}),
       consolidacao: {
         registrosRemovidosAusentes: 0,
         uploadsRemovidos: uploadsRemovidosIds.length,
@@ -551,6 +558,7 @@ class ConsolidadoProducaoImportService {
     let primeiroUploadId = 0;
     let diasAtualizados: number | undefined;
     let diasIguais: number | undefined;
+    const servicosCriados: string[] = [];
 
     for (const [, linhasTipo] of porAba) {
       const meta = linhasTipo[0];
@@ -560,6 +568,10 @@ class ConsolidadoProducaoImportService {
         meta.tipoSistema,
       );
       if (criado && !irmaos.some((s) => s.id === alvo.id)) irmaos.push(alvo);
+      if (criado) {
+        avisos.push(`serviço ${alvo.nome} criado`);
+        servicosCriados.push(alvo.nome);
+      }
 
       avisos.push(`${linhasTipo.length} linha(s) de "${meta.nomeServico}" (aba ${meta.aba}) → serviço "${alvo.nome}".`);
 
@@ -572,6 +584,7 @@ class ConsolidadoProducaoImportService {
         totalLinhasBrutas: parsed.totalLinhasBrutas,
         abasUsadas: [meta.aba],
         buffer,
+        servicoRecemCriado: criado,
       });
 
       splitPorServico.push({
@@ -641,6 +654,7 @@ class ConsolidadoProducaoImportService {
       },
       viagensValidasDashboard: importados,
       viagensInconsistentes: 0,
+      servicosCriados,
     };
   }
 
@@ -666,7 +680,7 @@ class ConsolidadoProducaoImportService {
       throw new Error('Nenhuma linha válida nas abas de serviço.');
     }
 
-    const { servico: entrada } = await garantirServicoNomeadoContrato(
+    const { servico: entrada, criado: entradaCriada } = await garantirServicoNomeadoContrato(
       contractId,
       primeiro.nomeServico,
       primeiro.tipoSistema,
@@ -680,6 +694,29 @@ class ConsolidadoProducaoImportService {
       substituirPorData,
     );
 
+    if (entradaCriada && !(resultado.servicosCriados || []).includes(entrada.nome)) {
+      resultado.servicosCriados = [...(resultado.servicosCriados || []), entrada.nome];
+      const split = resultado.splitPorServico.find((s) => s.servicoId === entrada.id);
+      if (split?.planilhaUploadId) {
+        const upload = await this.uploadRepo.findOne({ where: { id: split.planilhaUploadId } });
+        if (upload) {
+          upload.resumo = {
+            ...(upload.resumo || {
+              novos: upload.linhasImportadas || 0,
+              duplicadosIgnorados: upload.linhasIgnoradas || 0,
+              conflitantes: 0,
+              substituidos: upload.linhasSubstituidas || 0,
+            }),
+            servicosCriados: [entrada.nome],
+          };
+          await this.uploadRepo.save(upload);
+        }
+      }
+      if (!resultado.avisos.some((a) => a === `serviço ${entrada.nome} criado`)) {
+        resultado.avisos.push(`serviço ${entrada.nome} criado`);
+      }
+    }
+
     const criadosNaPlanilha = resultado.splitPorServico.length;
     resultado.avisos = [
       `${criadosNaPlanilha} serviço(s) saíram desta planilha, com KPI do próprio tipo.`,
@@ -690,7 +727,7 @@ class ConsolidadoProducaoImportService {
   }
 }
 
-function conteudoNormalizadoProducao(linha: LinhaConsolidadoProducao): Record<string, unknown> {
+export function conteudoNormalizadoProducao(linha: LinhaConsolidadoProducao): Record<string, unknown> {
   return {
     data: linha.dataSaida ? linha.dataSaida.toISOString().slice(0, 10) : null,
     local: linha.local,

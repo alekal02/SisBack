@@ -30,9 +30,7 @@ function aplicar(
   substituir: boolean,
 ) {
   const alvo = { servicoId: SERVICO, datas: new Set(novas.map((n) => n.dataIso)) };
-  const mantidos = substituir
-    ? estado.filter((r) => !registroPertenceAImportacaoAnterior(r, alvo))
-    : [...estado];
+  const mantidos = estado.filter((r) => !registroPertenceAImportacaoAnterior(r, alvo));
   const chaves = new Set(mantidos.map((r) => `${r.dataIso}|${r.qtd}|${r.planilhaUploadId ?? 'manual'}`));
   let importados = 0;
   for (const linha of novas) {
@@ -112,6 +110,14 @@ describe('chatbot atualizar_data — escopo da substituição', () => {
     assert.equal(r.mantidos.some((row) => row.planilhaUploadId == null && row.qtd === 5), true);
     assert.equal(r.mantidos.some((row) => row.servicoId === OUTRO && row.qtd === 7), true);
     assert.equal(r.total, 22);
+  });
+
+  it('o upload novo substitui o dia no upload aberto antigo', () => {
+    const antigo = Object.assign(reg({ planilhaUploadId: 812, dataIso: '2026-09-22' }), { qtd: 217 });
+    const r = aplicar([antigo], [{ dataIso: '2026-09-22', qtd: 212 }], false);
+    assert.equal(r.mantidos.some((row) => row.planilhaUploadId === 812), false);
+    assert.equal(r.mantidos.filter((row) => row.dataIso === '2026-09-22').length, 1);
+    assert.equal(r.total, 212);
   });
 
   it('não substitui data de ciclo fechado', () => {

@@ -48,6 +48,7 @@ import {
 } from '../services/viagensPorRotaService';
 import { resolverValorUnitarioPorTipo, normalizarTipoCaminhaoPeso } from '../config/pesoMaximoCaminhao';
 import { fecharRazaoKm, kmInformadoValido } from '../services/kmValido';
+import { registroEhLinhaDeColeta } from '../services/metricaExecutivaService';
 import {
   calcularCicloMensalContrato,
   inferirMesReferenciaAtual,
@@ -1707,6 +1708,7 @@ export class DashboardExecutivoController {
       let km = 0;
       let tonComKm = 0;
       for (const d of dados) {
+        if (!registroEhLinhaDeColeta(d)) continue;
         const v = contarViagensPorRotaRegistro(d);
         const k = Number(d.kmTotal) || 0;
         viagens += v;
