@@ -13,6 +13,7 @@ import {
   type NotaIdealViagem,
 } from './escalaIdealPeso';
 import { fmtNum } from './fmt';
+import { fecharRazaoKm } from '../kmValido';
 
 export interface LinhaOperacaoGrupo {
   chave: string;
@@ -40,6 +41,7 @@ export interface OperacaoDiaResumo {
   tonMediaColeta: number;
   kmMedioViagem: number;
   tonKm: number;
+  pctViagensKmValido: number;
   prodColetor: number;
 }
 
@@ -92,11 +94,14 @@ export function analiseOperacaoDeAgregacaoSql(agg: {
     horasProdutivas: number;
     placas: number;
     motoristas: number;
+    viagensComKm?: number;
+    pesoKgComKm?: number;
+    tonelagemComKm?: number;
   };
   porMotorista: Array<{
     label: string; viagens: number; tonelagem: number; kmTotal: number;
     horasProdutivas: number; tonPorViagem: number; kmPorViagem: number;
-    tipoCaminhao?: string;
+    tipoCaminhao?: string; pctViagensKmValido?: number;
   }>;
   porPlaca: Array<{
     label: string; viagens: number; tonelagem: number; kmTotal: number;
@@ -127,8 +132,14 @@ export function analiseOperacaoDeAgregacaoSql(agg: {
 
   const r = agg.resumo;
   const tonMedia = r.viagens > 0 ? r.pesoTotalTon / r.viagens : 0;
-  const kmMedio = r.viagens > 0 ? r.kmTotal / r.viagens : 0;
-  const tonKm = r.kmTotal > 0 ? r.pesoTotalTon / r.kmTotal : 0;
+  const razaoKm = fecharRazaoKm({
+    viagens: r.viagens,
+    viagensComKm: r.viagensComKm ?? r.viagens,
+    km: r.kmTotal,
+    tonComKm: r.tonelagemComKm ?? (r.pesoKgComKm != null ? r.pesoKgComKm / 1000 : r.pesoTotalTon),
+  });
+  const kmMedio = razaoKm.kmPorViagem;
+  const tonKm = razaoKm.tonPorKm;
   const prodColetor = r.placas > 0 ? r.pesoTotalTon / r.placas : 0;
 
   // Agrega por tipo a partir das placas tipadas
@@ -167,8 +178,9 @@ export function analiseOperacaoDeAgregacaoSql(agg: {
       motoristas: r.motoristas,
       coletoresEquipe: 0,
       tonMediaColeta: Math.round(tonMedia * 100) / 100,
-      kmMedioViagem: Math.round(kmMedio * 100) / 100,
-      tonKm: Math.round(tonKm * 10000) / 10000,
+      kmMedioViagem: kmMedio,
+      tonKm,
+      pctViagensKmValido: razaoKm.pctViagensKmValido,
       prodColetor: Math.round(prodColetor * 100) / 100,
     },
     porPlaca: agg.porPlaca.map(mapLinha),

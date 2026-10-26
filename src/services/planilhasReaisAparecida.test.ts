@@ -21,6 +21,8 @@ import {
 import { restringirDatasAoCicloDaDataMaisRecente } from '../utils/periodoCicloContrato';
 import { filtrarColetasProducaoNovas } from './producaoDedupService';
 import { ColetaData } from '../entities/ColetaData';
+import { nomeAbaColeta, linhasExcelPreenchidas } from './abaColeta';
+import { razoesKmDeRegistros } from './kmValido';
 
 const FIXTURES = path.join(__dirname, '..', '..', 'test', 'fixtures');
 
@@ -35,26 +37,6 @@ function round2(n: number): number {
 function isoDia(d: Date | null): string | null {
   if (!d) return null;
   return d.toISOString().slice(0, 10);
-}
-
-/** Linhas não vazias na ordem do sheet_to_json (cabeçalho fora). */
-function linhasExcelPreenchidas(sheet: XLSX.WorkSheet): number[] {
-  const ref = sheet['!ref'];
-  if (!ref) return [];
-  const range = XLSX.utils.decode_range(ref);
-  const rows: number[] = [];
-  for (let R = range.s.r + 1; R <= range.e.r; R++) {
-    let vazia = true;
-    for (let C = range.s.c; C <= range.e.c; C++) {
-      const cell = sheet[XLSX.utils.encode_cell({ r: R, c: C })];
-      if (cell && cell.v !== null && cell.v !== undefined && cell.v !== '') {
-        vazia = false;
-        break;
-      }
-    }
-    if (!vazia) rows.push(R + 1);
-  }
-  return rows;
 }
 
 type DedupInterno = {
@@ -76,7 +58,7 @@ function importarColetaComoUpload(buffer: Buffer): {
   ignoradas: Array<{ excel: number; motivos: string[] }>;
 } {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const sheet = wb.Sheets[nomeAbaColeta(wb)];
   const json = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: true });
   const excel = linhasExcelPreenchidas(sheet);
   const dedup = DeduplicacaoService as unknown as DedupInterno;
@@ -282,6 +264,15 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
       );
     }
 
+    const razao = razoesKmDeRegistros(r.importadas.map((c) => ({
+      viagens: Number(c.viagensPorRota) || Number(c.numeroViagens) || 0,
+      km: Number(c.kmTotal) || 0,
+      ton: obterPesoTotalRegistro(c) / 1000,
+    })));
+    if (razao.kmPorViagem !== 61.63) diffs.push(`km/viagem ${razao.kmPorViagem} (esperado 61.63)`);
+    if (razao.tonPorKm !== 0.1168) diffs.push(`ton/km ${razao.tonPorKm} (esperado 0.1168)`);
+    if (razao.pctViagensKmValido !== 78) diffs.push(`% KM válido ${razao.pctViagensKmValido} (esperado 78)`);
+
     assert.equal(diffs.length, 0, diffs.join('; '));
   });
 
@@ -300,6 +291,16 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
     const relatorio = totaisRelatorioDia(r.importadas);
 
     const diffs: string[] = [];
+    const razao = razoesKmDeRegistros(r.importadas.map((c) => ({
+      viagens: Number(c.viagensPorRota) || Number(c.numeroViagens) || 0,
+      km: Number(c.kmTotal) || 0,
+      ton: obterPesoTotalRegistro(c) / 1000,
+    })));
+    if (exec.kmMedioViagem !== razao.kmPorViagem || exec.tonKm !== razao.tonPorKm || exec.pctViagensKmValido !== 78) {
+      diffs.push(
+        `km válido: executivo ${exec.kmMedioViagem} km/viagem, ${exec.tonKm} ton/km, ${exec.pctViagensKmValido}% | referência ${razao.kmPorViagem}, ${razao.tonPorKm}, 78%`,
+      );
+    }
     for (const campo of ['ton', 'viagens', 'km'] as const) {
       if (dashboard[campo] !== executivo[campo] || dashboard[campo] !== relatorio[campo]) {
         diffs.push(

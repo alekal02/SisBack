@@ -39,6 +39,8 @@ export interface LinhaConsolidadoProducao {
   equipamento: string | null;
   observacao: string | null;
   aba: string;
+  /** Linha no Excel (1 = primeira linha da aba). */
+  linhaExcel: number;
   chaveServico: string;
   nomeServico: string;
   dados: Record<string, unknown>;
@@ -499,6 +501,7 @@ function parseLinhasAba(
       equipamento,
       observacao,
       aba,
+      linhaExcel: r + 1,
       chaveServico: cat.chaveServico,
       nomeServico: cat.nomeServico,
       dados,
@@ -607,6 +610,7 @@ function parseLinhasOperacional(
       equipamento,
       observacao,
       aba: nomeAba,
+      linhaExcel: r + 1,
       chaveServico: cat.chaveServico,
       nomeServico: cat.nomeServico,
       dados,

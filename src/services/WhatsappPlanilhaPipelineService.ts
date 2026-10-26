@@ -391,7 +391,7 @@ async function importarPlanilha(
         importados: s.importados,
       }));
     const partes = alvos.map((s) => `${s.servicoNome}: ${s.importados} reg.`);
-    const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema'));
+    const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
     const fraseDias = r.diasAtualizados != null && r.diasIguais != null
       ? fraseDiasHash(r.diasAtualizados, r.diasIguais)
       : '';
@@ -434,7 +434,7 @@ async function importarPlanilha(
         importados: s.importados,
       }));
     const partes = alvos.map((s) => `${s.servicoNome}: ${s.importados} reg.`);
-    const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema'));
+    const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
     return {
       planilhaUploadId: r.planilhaUploadId,
       importadas: r.importados,
@@ -505,7 +505,7 @@ async function importarPlanilha(
     const alvo = await obterServicoPorTipoContrato(contractId, TipoServico.ROCADEIRA);
     const r = await RocadaImportService.importar(buffer, nomeArquivo, alvo.id, undefined, substituir);
     invalidarCacheSaudeContratos(contractId);
-    const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema'));
+    const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
     return {
       planilhaUploadId: r.planilhaUploadId,
       importadas: r.importados,

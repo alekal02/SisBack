@@ -212,7 +212,7 @@ class RocadaImportService {
     }
 
     const existentes = await carregarChavesProducaoExistentes(servicoId, manager);
-    const { novas, ignoradas: ignoradasDuplicadas } = filtrarColetasProducaoNovas(
+    const { novas, ignoradas: ignoradasDuplicadas, repetidasNoArquivo, jaNoSistema } = filtrarColetasProducaoNovas(
       linhas,
       (l) => this.montarColeta(l, 0),
       existentes,
@@ -220,7 +220,7 @@ class RocadaImportService {
     const avisosCiclo = [
       ...prep.avisos,
       ...(ignoradasDuplicadas > 0
-        ? [`${ignoradasDuplicadas} linha(s) de "${servico.nome}" já estavam no sistema e não foram importadas de novo.`]
+        ? [`${repetidasNoArquivo > 0 ? `${repetidasNoArquivo} linha(s) de "${servico.nome}" repetida(s) no arquivo` : ''}${repetidasNoArquivo > 0 && jaNoSistema > 0 ? ' e ' : ''}${jaNoSistema > 0 ? `${jaNoSistema} linha(s) de "${servico.nome}" já estavam no sistema` : ''} e não foram importadas de novo.`]
         : []),
     ];
     if (novas.length === 0) {

@@ -742,7 +742,7 @@ export function calcularExpressao(expressao: string, contexto: ContextoCalculo):
         for (const d of dados) {
           const saida = parseNumeroBr(encontrarValorColuna(d, colSaida));
           const chegada = parseNumeroBr(encontrarValorColuna(d, colChegada));
-          if (isNaN(saida) || isNaN(chegada) || saida <= 0 || chegada <= 0) continue;
+          if (isNaN(saida) || isNaN(chegada) || !(saida > 0) || chegada < 0) continue;
           
           let diff = 0;
           if (saida < 1 && chegada < 1) {

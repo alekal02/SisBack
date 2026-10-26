@@ -47,6 +47,7 @@ import {
   sumarizarViagensPorRota,
 } from '../services/viagensPorRotaService';
 import { resolverValorUnitarioPorTipo, normalizarTipoCaminhaoPeso } from '../config/pesoMaximoCaminhao';
+import { fecharRazaoKm, kmInformadoValido } from '../services/kmValido';
 import {
   calcularCicloMensalContrato,
   inferirMesReferenciaAtual,
@@ -1258,6 +1259,8 @@ export class DashboardExecutivoController {
         coletoresAtivos: 0,
         horasProdutivas: 0,
         eficiencia: 0,
+        pctViagensKmValido: 0,
+        kmMedioViagem: 0,
       };
     }
 
@@ -1267,6 +1270,8 @@ export class DashboardExecutivoController {
     let pesoTotalKg = 0;
     let kmTotal = 0;
     let horasProdutivas = 0;
+    let viagensComKm = 0;
+    let pesoKgComKm = 0;
     const coletoresSet = new Set<string>();
 
     for (const d of dados) {
@@ -1279,7 +1284,19 @@ export class DashboardExecutivoController {
       }
 
       // KM
-      if (d.kmTotal) kmTotal += Number(d.kmTotal);
+      const kmLinha = Number(d.kmTotal) || 0;
+      if (kmLinha) kmTotal += kmLinha;
+      if (kmInformadoValido(kmLinha)) {
+        viagensComKm += contarViagensPorRotaRegistro(d);
+        const pesoLinha = Number(d.pesoTotal) || 0;
+        if (pesoLinha > 0) {
+          pesoKgComKm += pesoLinha;
+        } else {
+          for (const p of [d.peso1, d.peso2, d.peso3, d.peso4, d.peso5]) {
+            pesoKgComKm += Number(p) || 0;
+          }
+        }
+      }
 
       // Coletores (placa)
       if (d.placa) {
@@ -1296,7 +1313,12 @@ export class DashboardExecutivoController {
     }
 
     const tonelagem = Math.round((pesoTotalKg / 1000) * 100) / 100;
-    const eficiencia = kmTotal > 0 ? Math.round((tonelagem / kmTotal) * 10000) / 10000 : 0;
+    const razaoKm = fecharRazaoKm({
+      viagens,
+      viagensComKm,
+      km: kmTotal,
+      tonComKm: pesoKgComKm / 1000,
+    });
 
     return {
       viagens,
@@ -1304,7 +1326,9 @@ export class DashboardExecutivoController {
       kmTotal: Math.round(kmTotal * 100) / 100,
       coletoresAtivos: coletoresSet.size,
       horasProdutivas: Math.round(horasProdutivas * 100) / 100,
-      eficiencia,
+      eficiencia: razaoKm.tonPorKm,
+      pctViagensKmValido: razaoKm.pctViagensKmValido,
+      kmMedioViagem: razaoKm.kmPorViagem,
     };
   }
 
@@ -1605,7 +1629,7 @@ export class DashboardExecutivoController {
     const colKm = detectarColuna(dadosNorm, ['KM TOTAL', 'KM', 'KMTOTAL', 'KM_TOTAL', 'kmTotal', 'QUILOMETRO', 'DISTANCIA']);
     const colHoras = detectarColuna(dadosNorm, ['HORAS FORA UNIDADE', 'HORAS_FORA_UNIDADE', 'horasForaUnidade', 'TEMPO FORA', 'HORAS', 'HORAS PRODUTIVAS', 'tempoForaUnidade']);
 
-    const mapa = new Map<string, { viagens: number; tonelagem: number; kmTotal: number; horasProdutivas: number; placa: string }>();
+    const mapa = new Map<string, { viagens: number; tonelagem: number; kmTotal: number; horasProdutivas: number; placa: string; viagensComKm: number; tonComKm: number }>();
 
     for (const obj of dadosNorm) {
       let motorista = String(encontrarValorColuna(obj, colMotorista) || '').trim();
@@ -1617,7 +1641,7 @@ export class DashboardExecutivoController {
       if (!motorista) continue;
 
       if (!mapa.has(motorista)) {
-        mapa.set(motorista, { viagens: 0, tonelagem: 0, kmTotal: 0, horasProdutivas: 0, placa: '' });
+        mapa.set(motorista, { viagens: 0, tonelagem: 0, kmTotal: 0, horasProdutivas: 0, placa: '', viagensComKm: 0, tonComKm: 0 });
       }
       const entry = mapa.get(motorista)!;
 
@@ -1625,9 +1649,15 @@ export class DashboardExecutivoController {
       if (placa && !entry.placa) entry.placa = placa;
 
       const pesoKg = Number(encontrarValorColuna(obj, colPeso)) || 0;
+      const kmLinha = Number(encontrarValorColuna(obj, colKm)) || 0;
+      const viagensLinha = contarViagensPorRotaRegistro(obj);
       entry.tonelagem += pesoKg / 1000;
-      entry.viagens += contarViagensPorRotaRegistro(obj);
-      entry.kmTotal += Number(encontrarValorColuna(obj, colKm)) || 0;
+      entry.viagens += viagensLinha;
+      entry.kmTotal += kmLinha;
+      if (kmInformadoValido(kmLinha)) {
+        entry.viagensComKm += viagensLinha;
+        entry.tonComKm += pesoKg / 1000;
+      }
 
       // ═══ HORAS PRODUTIVAS — usando helper centralizado extrairHorasProdutivas ═══
       const horasMotorista = extrairHorasProdutivas(obj);
@@ -1645,8 +1675,19 @@ export class DashboardExecutivoController {
         kmTotal: Math.round(data.kmTotal * 100) / 100,
         horasProdutivas: Math.round(data.horasProdutivas * 100) / 100,
         tonPorViagem: data.viagens > 0 ? Math.round((data.tonelagem / data.viagens) * 100) / 100 : 0,
-        kmPorViagem: data.viagens > 0 ? Math.round((data.kmTotal / data.viagens) * 100) / 100 : 0,
-        tonPorKm: data.kmTotal > 0 ? Math.round((data.tonelagem / data.kmTotal) * 10000) / 10000 : 0,
+        ...(() => {
+          const razao = fecharRazaoKm({
+            viagens: data.viagens,
+            viagensComKm: data.viagensComKm,
+            km: data.kmTotal,
+            tonComKm: data.tonComKm,
+          });
+          return {
+            kmPorViagem: razao.kmPorViagem,
+            tonPorKm: razao.tonPorKm,
+            pctViagensKmValido: razao.pctViagensKmValido,
+          };
+        })(),
         tonPorHora: data.horasProdutivas > 0 ? Math.round((data.tonelagem / data.horasProdutivas) * 100) / 100 : 0,
       }))
       .sort((a, b) => b.tonelagem - a.tonelagem);
@@ -1659,18 +1700,36 @@ export class DashboardExecutivoController {
     dadosAtuais: ColetaData[],
     dadosAnteriores: ColetaData[],
     temBasePlanilha: boolean,
-  ): { atual: number; anterior: number; variacao: { valor: number; tipo: string } } {
+  ): { atual: number; anterior: number; pctViagensKmValido: number; variacao: { valor: number; tipo: string } } {
     const calc = (dados: ColetaData[]) => {
-      const totalViagens = sumarizarViagensPorRota(dados);
-      if (totalViagens <= 0) return 0;
-      const totalKm = dados.reduce((s, d) => s + (Number(d.kmTotal) || 0), 0);
-      return totalKm / totalViagens;
+      let viagens = 0;
+      let viagensComKm = 0;
+      let km = 0;
+      let tonComKm = 0;
+      for (const d of dados) {
+        const v = contarViagensPorRotaRegistro(d);
+        const k = Number(d.kmTotal) || 0;
+        viagens += v;
+        if (kmInformadoValido(k)) {
+          viagensComKm += v;
+          km += k;
+          tonComKm += (Number(d.pesoTotal) || 0) / 1000;
+        }
+      }
+      return fecharRazaoKm({ viagens, viagensComKm, km, tonComKm });
     };
 
-    const atual = Math.round(calc(dadosAtuais) * 100) / 100;
-    const anterior = Math.round(calc(dadosAnteriores) * 100) / 100;
+    const atualRazao = calc(dadosAtuais);
+    const anteriorRazao = calc(dadosAnteriores);
+    const atual = atualRazao.kmPorViagem;
+    const anterior = anteriorRazao.kmPorViagem;
 
-    return { atual, anterior, variacao: calcVariacao(atual, anterior, { temBase: temBasePlanilha }) };
+    return {
+      atual,
+      anterior,
+      pctViagensKmValido: atualRazao.pctViagensKmValido,
+      variacao: calcVariacao(atual, anterior, { temBase: temBasePlanilha }),
+    };
   }
 
   /**
@@ -2416,7 +2475,7 @@ export class DashboardExecutivoController {
       const pesoMedioColeta = opAtual.viagens > 0 ? opAtual.tonelagem / opAtual.viagens : 0;
 
       // KM médio por viagem
-      const kmMedioPorViagem = opAtual.viagens > 0 ? opAtual.kmTotal / opAtual.viagens : 0;
+      const kmMedioPorViagem = opAtual.kmMedioViagem || 0;
 
       // ═══ NOVOS CÁLCULOS — 7 GRÁFICOS DO PDF ═══
 
@@ -2692,6 +2751,7 @@ export class DashboardExecutivoController {
           horasProdutivas: opAtual.horasProdutivas,
           produtividadeColetor: Math.round(prodMedColetor * 100) / 100,
           kmMedioViagem: Math.round(kmMedioPorViagem * 100) / 100,
+          pctViagensKmValido: opAtual.pctViagensKmValido,
           pesoMedioColeta: Math.round(pesoMedioColeta * 100) / 100,
         },
 

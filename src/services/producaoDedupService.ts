@@ -100,20 +100,52 @@ export function filtrarColetasProducaoNovas<T>(
   linhas: T[],
   montar: (linha: T) => ColetaData,
   existentes: Set<string>,
-): { novas: ColetaData[]; ignoradas: number } {
+): {
+  novas: ColetaData[];
+  ignoradas: number;
+  repetidasNoArquivo: number;
+  jaNoSistema: number;
+  linhasRepetidas: T[];
+} {
   const novas: ColetaData[] = [];
+  const linhasRepetidas: T[] = [];
   const noArquivo = new Set<string>();
-  let ignoradas = 0;
+  let repetidasNoArquivo = 0;
+  let jaNoSistema = 0;
   for (const linha of linhas) {
     const coleta = montar(linha);
     const chave = chaveProducaoColeta(coleta);
-    if (!chave || existentes.has(chave) || noArquivo.has(chave)) {
-      ignoradas++;
+    if (!chave || noArquivo.has(chave)) {
+      repetidasNoArquivo++;
+      linhasRepetidas.push(linha);
+      continue;
+    }
+    if (existentes.has(chave)) {
+      jaNoSistema++;
       continue;
     }
     noArquivo.add(chave);
     existentes.add(chave);
     novas.push(coleta);
   }
-  return { novas, ignoradas };
+  return {
+    novas,
+    ignoradas: repetidasNoArquivo + jaNoSistema,
+    repetidasNoArquivo,
+    jaNoSistema,
+    linhasRepetidas,
+  };
+}
+
+/** Soma do quantitativo único no arquivo — o que fica no sistema, sem repetir linha. */
+export function quantitativoUnicoProducao<T>(
+  linhas: T[],
+  montar: (linha: T) => ColetaData,
+): number {
+  const { novas } = filtrarColetasProducaoNovas(linhas, montar, new Set());
+  const total = novas.reduce((s, c) => {
+    const q = Number((c.dados as Record<string, unknown> | null)?.QUANTITATIVO || 0);
+    return s + (Number.isFinite(q) ? q : 0);
+  }, 0);
+  return Math.round(total * 1000) / 1000;
 }

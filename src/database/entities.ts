@@ -5,6 +5,7 @@ import { AbastecimentoLog } from '../entities/AbastecimentoLog';
 import { ColetaData } from '../entities/ColetaData';
 import { ColetaTotaisDia } from '../entities/ColetaTotaisDia';
 import { PlanilhaUpload } from '../entities/PlanilhaUpload';
+import { ImportacaoLinhaIgnorada } from '../entities/ImportacaoLinhaIgnorada';
 import { Servico } from '../entities/Servico';
 import { Contract } from '../entities/Contract';
 import { KpiUniversal } from '../entities/KpiUniversal';
@@ -31,6 +32,7 @@ export const TENANT_ENTITIES = [
   ColetaData,
   ColetaTotaisDia,
   PlanilhaUpload,
+  ImportacaoLinhaIgnorada,
   Contract,
   Servico,
   KpiUniversal,

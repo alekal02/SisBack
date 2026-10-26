@@ -46,6 +46,7 @@ import {
   verificarDatasEmCicloFechado,
 } from '../services/cicloPlanilhaService';
 import { contarViagensValidadas, sumarizarViagensPorRota, contarViagensPorRotaRegistro } from '../services/viagensPorRotaService';
+import { fecharRazaoKm, kmInformadoValido } from '../services/kmValido';
 import { agregarRankingColetores, calcularMediaTonPorColetorViagem } from '../services/coletoresUnicosService';
 import {
   detectarColunaRankingRotas,
@@ -399,6 +400,9 @@ interface MetricaExecutivaCalc {
   tonKm: number;
   prodColetor: number;
   kmMedioViagem: number;
+  pctViagensKmValido: number;
+  viagensComKmValido: number;
+  tonComKmValido: number;
   tonMediaColeta: number;
   receitaKm: number;
   receitaHora: number;
@@ -436,9 +440,17 @@ function calcularMetricaExecutivaDeDados(
 
   let kmTotal = 0;
   let pesoTotalKg = 0;
+  let viagensComKm = 0;
+  let pesoKgComKm = 0;
   for (const d of dadosNorm) {
-    kmTotal += Number(encontrarValorColuna(d, colKm)) || 0;
-    pesoTotalKg += Number(encontrarValorColuna(d, colPeso)) || 0;
+    const kmLinha = Number(encontrarValorColuna(d, colKm)) || 0;
+    const peso = Number(encontrarValorColuna(d, colPeso)) || 0;
+    kmTotal += kmLinha;
+    pesoTotalKg += peso;
+    if (kmInformadoValido(kmLinha)) {
+      viagensComKm += contarViagensPorRotaRegistro(d);
+      pesoKgComKm += peso;
+    }
   }
   const pesoTotalTon = pesoTotalKg / 1000;
   const horasProdutivas = calcularHorasProdutivasTotal(dadosNorm);
@@ -466,9 +478,15 @@ function calcularMetricaExecutivaDeDados(
     faturamento = pesoTotalKg / 1000 * FALLBACK_VALOR_TONELADA;
   }
 
-  const tonKm = kmTotal > 0 ? Math.round((pesoTotalTon / kmTotal) * 10000) / 10000 : 0;
+  const razaoKm = fecharRazaoKm({
+    viagens,
+    viagensComKm,
+    km: kmTotal,
+    tonComKm: pesoKgComKm / 1000,
+  });
+  const tonKm = razaoKm.tonPorKm;
   const prodColetor = calcularMediaTonPorColetorViagem(dadosNorm);
-  const kmMedioViagem = viagens > 0 ? Math.round((kmTotal / viagens) * 100) / 100 : 0;
+  const kmMedioViagem = razaoKm.kmPorViagem;
   const tonMediaColeta = viagens > 0 ? Math.round((pesoTotalTon / viagens) * 100) / 100 : 0;
   const receitaKm = kmTotal > 0 ? Math.round((faturamento / kmTotal) * 100) / 100 : 0;
   const receitaHora = horasProdutivas > 0
@@ -486,6 +504,9 @@ function calcularMetricaExecutivaDeDados(
     tonKm,
     prodColetor,
     kmMedioViagem,
+    pctViagensKmValido: razaoKm.pctViagensKmValido,
+    viagensComKmValido: razaoKm.viagensComKm,
+    tonComKmValido: razaoKm.tonComKm,
     tonMediaColeta,
     receitaKm,
     receitaHora,
@@ -1728,7 +1749,7 @@ export class ServicoController {
             metrica_executiva: {
               viagens: 0, qtdColetores: 0, pesoTotalTon: 0, kmTotal: 0,
               horasProdutivas: 0, horasMediaRotas: 0, faturamento: 0, fatPorTipo: {},
-              tonKm: 0, prodColetor: 0, kmMedioViagem: 0, tonMediaColeta: 0,
+              tonKm: 0, prodColetor: 0, kmMedioViagem: 0, pctViagensKmValido: 0, viagensComKmValido: 0, tonComKmValido: 0, tonMediaColeta: 0,
               receitaKm: 0, receitaHora: 0, temValor: false,
               areaM2: 0, registros: 0,
             },
@@ -1831,6 +1852,9 @@ export class ServicoController {
             tonKm: 0,
             prodColetor: 0,
             kmMedioViagem: 0,
+            pctViagensKmValido: 0,
+            viagensComKmValido: 0,
+            tonComKmValido: 0,
             tonMediaColeta: 0,
             receitaKm: 0,
             receitaHora: 0,
@@ -2022,7 +2046,7 @@ export class ServicoController {
           metrica_executiva: {
             viagens: 0, qtdColetores: 0, pesoTotalTon: 0, kmTotal: 0,
             horasProdutivas: 0, horasMediaRotas: 0, faturamento: 0, fatPorTipo: {},
-            tonKm: 0, prodColetor: 0, kmMedioViagem: 0, tonMediaColeta: 0,
+            tonKm: 0, prodColetor: 0, kmMedioViagem: 0, pctViagensKmValido: 0, viagensComKmValido: 0, tonComKmValido: 0, tonMediaColeta: 0,
             receitaKm: 0, receitaHora: 0, temValor: false,
           },
           periodoDados,
@@ -3244,7 +3268,7 @@ export class ServicoController {
         return res.json({
           viagens: m.registros, qtdColetores: m.operadores, pesoTotalTon: 0, kmTotal: 0,
           horasProdutivas: 0, horasMediaRotas: 0, faturamento: Math.round(fat * 100) / 100,
-          fatPorTipo: {}, tonKm: 0, prodColetor: 0, kmMedioViagem: 0, tonMediaColeta: 0,
+          fatPorTipo: {}, tonKm: 0, prodColetor: 0, kmMedioViagem: 0, pctViagensKmValido: 0, viagensComKmValido: 0, tonComKmValido: 0, tonMediaColeta: 0,
           receitaKm: 0, receitaHora: 0, temValor: fat > 0 || Number(valoresFixos.VALOR_M2 || 0) > 0
             || Number(valoresFixos.VALOR_M2_MANUAL || 0) > 0
             || Number(valoresFixos.VALOR_M2_MECANIZADA || 0) > 0,
@@ -3259,7 +3283,7 @@ export class ServicoController {
         return res.json({
           viagens: 0, qtdColetores: 0, pesoTotalTon: 0, kmTotal: 0,
           horasProdutivas: 0, faturamento: 0, fatPorTipo: {},
-          tonKm: 0, prodColetor: 0, kmMedioViagem: 0, tonMediaColeta: 0,
+          tonKm: 0, prodColetor: 0, kmMedioViagem: 0, pctViagensKmValido: 0, viagensComKmValido: 0, tonComKmValido: 0, tonMediaColeta: 0,
           receitaKm: 0, receitaHora: 0, temValor: false, coletoresList: [],
         });
       }
@@ -3887,6 +3911,8 @@ async getModeloExecutivo(req: Request, res: Response): Promise<any> {
         viagens: number;
         pesoTotal: number;
         kmTotal: number;
+        viagensComKm: number;
+        pesoComKm: number;
         horas: number;
       }>();
 
@@ -3907,6 +3933,8 @@ async getModeloExecutivo(req: Request, res: Response): Promise<any> {
             viagens: 0,
             pesoTotal: 0,
             kmTotal: 0,
+            viagensComKm: 0,
+            pesoComKm: 0,
             horas: 0,
           });
         }
@@ -3915,9 +3943,16 @@ async getModeloExecutivo(req: Request, res: Response): Promise<any> {
         const placaVal = String(encontrarValorColuna(d, colPlaca) || '').trim();
         if (placaVal) entry.placas.add(placaVal);
 
-        entry.viagens += contarViagensPorRotaRegistro(d);
-        entry.pesoTotal += Number(encontrarValorColuna(d, colPeso)) || 0;
-        entry.kmTotal += Number(encontrarValorColuna(d, colKm)) || 0;
+        const viagensLinha = contarViagensPorRotaRegistro(d);
+        const pesoLinha = Number(encontrarValorColuna(d, colPeso)) || 0;
+        const kmLinha = Number(encontrarValorColuna(d, colKm)) || 0;
+        entry.viagens += viagensLinha;
+        entry.pesoTotal += pesoLinha;
+        entry.kmTotal += kmLinha;
+        if (kmInformadoValido(kmLinha)) {
+          entry.viagensComKm += viagensLinha;
+          entry.pesoComKm += pesoLinha;
+        }
 
         let horas = Number(encontrarValorColuna(d, colHora)) || 0;
         if (horas > 0 && horas < 100) entry.horas += horas;
@@ -3950,8 +3985,12 @@ async getModeloExecutivo(req: Request, res: Response): Promise<any> {
         .map(([nome, data]) => {
           const tonelagem = data.pesoTotal / 1000;
           const tonPorViagem = data.viagens > 0 ? tonelagem / data.viagens : 0;
-          const kmPorViagem = data.viagens > 0 ? data.kmTotal / data.viagens : 0;
-          const tonPorKm = data.kmTotal > 0 ? tonelagem / data.kmTotal : 0;
+          const razao = fecharRazaoKm({
+            viagens: data.viagens,
+            viagensComKm: data.viagensComKm,
+            km: data.kmTotal,
+            tonComKm: data.pesoComKm / 1000,
+          });
           const tonPorHora = data.horas > 0 ? tonelagem / data.horas : 0;
 
           return {
@@ -3962,8 +4001,9 @@ async getModeloExecutivo(req: Request, res: Response): Promise<any> {
             kmTotal: Math.round(data.kmTotal * 100) / 100,
             horasProdutivas: Math.round(data.horas * 100) / 100,
             tonPorViagem: Math.round(tonPorViagem * 100) / 100,
-            kmPorViagem: Math.round(kmPorViagem * 100) / 100,
-            tonPorKm: Math.round(tonPorKm * 10000) / 10000,
+            kmPorViagem: razao.kmPorViagem,
+            tonPorKm: razao.tonPorKm,
+            pctViagensKmValido: razao.pctViagensKmValido,
             tonPorHora: Math.round(tonPorHora * 100) / 100,
           };
         })

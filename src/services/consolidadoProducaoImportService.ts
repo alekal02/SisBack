@@ -31,7 +31,13 @@ import {
   type TipoServicoConsolidado,
 } from './consolidadoProducaoPlanilhaParser';
 import { persistirArquivoOriginalUpload } from './planilhaOriginalStorage';
-import { carregarChavesProducaoExistentes, filtrarColetasProducaoNovas } from './producaoDedupService';
+import { carregarChavesProducaoExistentes, filtrarColetasProducaoNovas, quantitativoUnicoProducao } from './producaoDedupService';
+import {
+  MOTIVO_LINHA_IGNORADA,
+  dataMaisRecente,
+  dataSuspeitaAntesDaMaisRecente,
+  gravarLinhasIgnoradas,
+} from './importacaoLinhaIgnorada';
 import { executarImportacaoAtomica } from './substituicaoImportacaoProducao';
 import {
   carregarHashesDia,
@@ -167,6 +173,8 @@ class ConsolidadoProducaoImportService {
     avisosCiclo: string[];
     datasIgnoradasCicloFechado: string[];
     ignoradasDuplicadas: number;
+    repetidasNoArquivo: number;
+    jaNoSistema: number;
     diasAtualizados?: number;
     diasIguais?: number;
     datasAlteradas?: string[];
@@ -179,10 +187,16 @@ class ConsolidadoProducaoImportService {
     )];
     const prep = await prepararDatasImportacaoCiclo(servico.id, datasTodas);
     const permitidasSet = new Set(prep.datas);
-    const linhas = linhasBrutas.filter((l) => {
+    const noCiclo = linhasBrutas.filter((l) => {
       const d = l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null;
       return Boolean(d && permitidasSet.has(d));
     });
+    const foraCiclo = linhasBrutas.filter((l) => !noCiclo.includes(l));
+    const recente = dataMaisRecente(linhasBrutas.map((l) => l.dataSaida));
+    const suspeitas = recente
+      ? noCiclo.filter((l) => l.dataSaida && dataSuspeitaAntesDaMaisRecente(l.dataSaida, recente))
+      : [];
+    const linhas = noCiclo.filter((l) => !suspeitas.includes(l));
     if (linhas.length === 0) {
       return {
         servicoId: servico.id,
@@ -200,6 +214,8 @@ class ConsolidadoProducaoImportService {
           : ['Nenhuma data do ciclo atual nesta planilha — o ciclo anterior não foi alterado.'],
         datasIgnoradasCicloFechado: prep.bloqueadasFechado,
         ignoradasDuplicadas: 0,
+        repetidasNoArquivo: 0,
+        jaNoSistema: 0,
       };
     }
 
@@ -235,7 +251,7 @@ class ConsolidadoProducaoImportService {
       diasAtualizados = decisao.regravar.length;
       diasIguais = decisao.iguais.length;
       if (decisao.regravar.length === 0) {
-        const quantitativoTotal = Math.round(linhas.reduce((s, l) => s + l.quantitativo, 0) * 1000) / 1000;
+        const quantitativoTotal = quantitativoUnicoProducao(linhas, (l) => this.montarColeta(l, 0));
         const dias = porData.size;
         const bairros = new Set(linhas.map((l) => l.local).filter(Boolean)).size;
         return {
@@ -252,6 +268,8 @@ class ConsolidadoProducaoImportService {
           avisosCiclo: prep.avisos,
           datasIgnoradasCicloFechado: prep.bloqueadasFechado,
           ignoradasDuplicadas: 0,
+          repetidasNoArquivo: 0,
+          jaNoSistema: 0,
           diasAtualizados,
           diasIguais,
           datasAlteradas: [],
@@ -267,22 +285,31 @@ class ConsolidadoProducaoImportService {
     }
 
     const existentes = await carregarChavesProducaoExistentes(servico.id, manager);
-    const { novas, ignoradas: ignoradasDuplicadas } = filtrarColetasProducaoNovas(
+    const {
+      novas,
+      ignoradas: ignoradasDuplicadas,
+      repetidasNoArquivo,
+      jaNoSistema,
+      linhasRepetidas,
+    } = filtrarColetasProducaoNovas(
       linhasTrabalho,
       (l) => this.montarColeta(l, 0),
       existentes,
     );
     const avisosCiclo = [
       ...prep.avisos,
-      ...(ignoradasDuplicadas > 0
-        ? [`${ignoradasDuplicadas} linha(s) de "${servico.nome}" já estavam no sistema e não foram importadas de novo.`]
+      ...(repetidasNoArquivo > 0
+        ? [`${repetidasNoArquivo} linha(s) de "${servico.nome}" repetida(s) no arquivo e não foram importadas de novo.`]
+        : []),
+      ...(jaNoSistema > 0
+        ? [`${jaNoSistema} linha(s) de "${servico.nome}" já estavam no sistema e não foram importadas de novo.`]
         : []),
     ];
     if (novas.length === 0) {
       if (hashesRegravar.length > 0) {
         await salvarHashesDia(servico.id, hashesRegravar, manager);
       }
-      const quantitativoTotal = Math.round(linhasTrabalho.reduce((s, l) => s + l.quantitativo, 0) * 1000) / 1000;
+      const quantitativoTotal = quantitativoUnicoProducao(linhasTrabalho, (l) => this.montarColeta(l, 0));
       const dias = new Set(linhasTrabalho.map((l) => isoDataLinha(l)).filter(Boolean)).size;
       const bairros = new Set(linhasTrabalho.map((l) => l.local).filter(Boolean)).size;
       return {
@@ -299,6 +326,8 @@ class ConsolidadoProducaoImportService {
         avisosCiclo,
         datasIgnoradasCicloFechado: prep.bloqueadasFechado,
         ignoradasDuplicadas,
+        repetidasNoArquivo,
+        jaNoSistema,
         diasAtualizados,
         diasIguais,
         datasAlteradas: hashesRegravar.map((item) => item.data),
@@ -440,6 +469,12 @@ class ConsolidadoProducaoImportService {
       await salvarHashesDia(servico.id, hashesRegravar, manager);
     }
 
+    await gravarLinhasIgnoradas(uploadSalvo.id, [
+      ...foraCiclo.map((l) => ({ linhaExcel: l.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.foraDoCiclo })),
+      ...suspeitas.map((l) => ({ linhaExcel: l.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.dataSuspeita })),
+      ...linhasRepetidas.map((l) => ({ linhaExcel: l.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.repetidaNoArquivo })),
+    ], manager);
+
     return {
       servicoId: servico.id,
       servicoNome: servico.nome,
@@ -454,6 +489,8 @@ class ConsolidadoProducaoImportService {
       avisosCiclo,
       datasIgnoradasCicloFechado: prep.bloqueadasFechado,
       ignoradasDuplicadas,
+      repetidasNoArquivo,
+      jaNoSistema,
       diasAtualizados,
       diasIguais,
       datasAlteradas: hashesRegravar.map((item) => item.data),
@@ -509,6 +546,8 @@ class ConsolidadoProducaoImportService {
     const allDatasCicloFechado: string[] = [];
     let importados = 0;
     let ignoradasDuplicadasTotal = 0;
+    let repetidasNoArquivoTotal = 0;
+    let jaNoSistemaTotal = 0;
     let primeiroUploadId = 0;
     let diasAtualizados: number | undefined;
     let diasIguais: number | undefined;
@@ -547,6 +586,8 @@ class ConsolidadoProducaoImportService {
       });
       importados += r.importados;
       ignoradasDuplicadasTotal += r.ignoradasDuplicadas;
+      repetidasNoArquivoTotal += r.repetidasNoArquivo || 0;
+      jaNoSistemaTotal += r.jaNoSistema || 0;
       if (r.diasAtualizados != null) {
         diasAtualizados = (diasAtualizados ?? 0) + r.diasAtualizados;
         diasIguais = (diasIguais ?? 0) + (r.diasIguais ?? 0);
@@ -566,9 +607,14 @@ class ConsolidadoProducaoImportService {
       );
     }
     if (importados === 0 && ignoradasDuplicadasTotal > 0) {
-      avisos.unshift(
-        `Nenhum registro novo: ${ignoradasDuplicadasTotal} linha(s) já estavam no sistema e não foram importadas de novo.`,
-      );
+      const partes: string[] = [];
+      if (repetidasNoArquivoTotal > 0) {
+        partes.push(`${repetidasNoArquivoTotal} linha(s) repetida(s) no arquivo`);
+      }
+      if (jaNoSistemaTotal > 0) {
+        partes.push(`${jaNoSistemaTotal} linha(s) já estavam no sistema`);
+      }
+      avisos.unshift(`Nenhum registro novo: ${partes.join(' e ')}.`);
     }
 
     const ignorados = parsed.linhas.length - importados + parsed.linhasSemTipo + parsed.linhasSemData;

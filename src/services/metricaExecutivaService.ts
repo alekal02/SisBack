@@ -1,8 +1,9 @@
 import { encontrarValorColuna } from './FormulaEngine';
 import { calcularHorasProdutivasTotal } from './horasProdutivasService';
-import { contarViagensValidadas } from './viagensPorRotaService';
+import { contarViagensPorRotaRegistro, contarViagensValidadas } from './viagensPorRotaService';
 import { calcularMediaTonPorColetorViagem } from './coletoresUnicosService';
 import { resolverValorUnitarioPorTipo } from '../config/pesoMaximoCaminhao';
+import { fecharRazaoKm, kmInformadoValido } from './kmValido';
 
 export function detectarColuna(dados: Record<string, unknown>[], candidatos: string[]): string {
   if (!dados || dados.length === 0) return '';
@@ -65,6 +66,10 @@ export interface MetricaExecutivaCalc {
   tonKm: number;
   prodColetor: number;
   kmMedioViagem: number;
+  /** Percentual 0–100 das viagens com KM > 0. */
+  pctViagensKmValido: number;
+  viagensComKmValido: number;
+  tonComKmValido: number;
   tonMediaColeta: number;
   receitaKm: number;
   receitaHora: number;
@@ -95,14 +100,21 @@ export function calcularMetricaExecutivaDeDados(
   const coletoresSet = new Set<string>();
   let kmTotal = 0;
   let pesoTotalKg = 0;
+  let viagensComKm = 0;
+  let pesoKgComKm = 0;
   let faturamento = 0;
   const fatPorTipo: Record<string, number> = {};
   for (const d of dadosNorm) {
     const placa = encontrarValorColuna(d, colPlaca);
     if (placa !== undefined && placa !== null && placa !== '') coletoresSet.add(String(placa).trim());
-    kmTotal += Number(encontrarValorColuna(d, colKm)) || 0;
+    const kmLinha = Number(encontrarValorColuna(d, colKm)) || 0;
     const peso = Number(encontrarValorColuna(d, colPeso)) || 0;
+    kmTotal += kmLinha;
     pesoTotalKg += peso;
+    if (kmInformadoValido(kmLinha)) {
+      viagensComKm += contarViagensPorRotaRegistro(d);
+      pesoKgComKm += peso;
+    }
     if (!temValor || !colPeso || peso <= 0) continue;
     const tipoRaw = colTipo ? String(encontrarValorColuna(d, colTipo) || '').toUpperCase().trim() : '';
     if (/^\d+$/.test(tipoRaw)) continue;
@@ -124,9 +136,15 @@ export function calcularMetricaExecutivaDeDados(
     faturamento = pesoTotalKg / 1000 * FALLBACK_VALOR_TONELADA;
   }
 
-  const tonKm = kmTotal > 0 ? Math.round((pesoTotalTon / kmTotal) * 10000) / 10000 : 0;
+  const razaoKm = fecharRazaoKm({
+    viagens,
+    viagensComKm,
+    km: kmTotal,
+    tonComKm: pesoKgComKm / 1000,
+  });
+  const tonKm = razaoKm.tonPorKm;
   const prodColetor = calcularMediaTonPorColetorViagem(dadosNorm);
-  const kmMedioViagem = viagens > 0 ? Math.round((kmTotal / viagens) * 100) / 100 : 0;
+  const kmMedioViagem = razaoKm.kmPorViagem;
   const tonMediaColeta = viagens > 0 ? Math.round((pesoTotalTon / viagens) * 100) / 100 : 0;
   const receitaKm = kmTotal > 0 ? Math.round((faturamento / kmTotal) * 100) / 100 : 0;
   const receitaHora = horasProdutivas > 0
@@ -144,6 +162,9 @@ export function calcularMetricaExecutivaDeDados(
     tonKm,
     prodColetor,
     kmMedioViagem,
+    pctViagensKmValido: razaoKm.pctViagensKmValido,
+    viagensComKmValido: razaoKm.viagensComKm,
+    tonComKmValido: razaoKm.tonComKm,
     tonMediaColeta,
     receitaKm,
     receitaHora,
@@ -160,6 +181,7 @@ export function agregarMetricasExecutivas(
     return {
       viagens: 0, qtdColetores: 0, pesoTotalTon: 0, kmTotal: 0, horasProdutivas: 0,
       faturamento: 0, fatPorTipo: {}, tonKm: 0, prodColetor: 0, kmMedioViagem: 0,
+      pctViagensKmValido: 0, viagensComKmValido: 0, tonComKmValido: 0,
       tonMediaColeta: 0, receitaKm: 0, receitaHora: 0, temValor: false, colunasDetectadas: {},
     };
   }
@@ -167,6 +189,8 @@ export function agregarMetricasExecutivas(
   const viagens = metricas.reduce((s, m) => s + m.viagens, 0);
   const pesoTotalTon = metricas.reduce((s, m) => s + m.pesoTotalTon, 0);
   const kmTotal = metricas.reduce((s, m) => s + m.kmTotal, 0);
+  const viagensComKm = metricas.reduce((s, m) => s + (m.viagensComKmValido || 0), 0);
+  const tonComKm = metricas.reduce((s, m) => s + (m.tonComKmValido || 0), 0);
   const horasProdutivas = metricas.reduce((s, m) => s + m.horasProdutivas, 0);
   const faturamento = metricas.reduce((s, m) => s + m.faturamento, 0);
   const fatPorTipo: Record<string, number> = {};
@@ -176,8 +200,9 @@ export function agregarMetricasExecutivas(
     }
   }
   const temValor = metricas.some(m => m.temValor);
-  const tonKm = kmTotal > 0 ? Math.round((pesoTotalTon / kmTotal) * 10000) / 10000 : 0;
-  const kmMedioViagem = viagens > 0 ? Math.round((kmTotal / viagens) * 100) / 100 : 0;
+  const razaoKm = fecharRazaoKm({ viagens, viagensComKm, km: kmTotal, tonComKm });
+  const tonKm = razaoKm.tonPorKm;
+  const kmMedioViagem = razaoKm.kmPorViagem;
   const tonMediaColeta = viagens > 0 ? Math.round((pesoTotalTon / viagens) * 100) / 100 : 0;
   const receitaKm = kmTotal > 0 ? Math.round((faturamento / kmTotal) * 100) / 100 : 0;
   const receitaHora = horasProdutivas > 0 ? Math.round((faturamento / horasProdutivas) * 100) / 100 : 0;
@@ -194,6 +219,9 @@ export function agregarMetricasExecutivas(
     tonKm,
     prodColetor: Math.round(prodColetor * 100) / 100,
     kmMedioViagem,
+    pctViagensKmValido: razaoKm.pctViagensKmValido,
+    viagensComKmValido: razaoKm.viagensComKm,
+    tonComKmValido: razaoKm.tonComKm,
     tonMediaColeta,
     receitaKm,
     receitaHora,

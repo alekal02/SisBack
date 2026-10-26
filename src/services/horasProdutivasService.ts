@@ -1,4 +1,5 @@
 import { algumValorEspaco, encontrarValorColuna, parseNumeroBr, valoresPorNormaEspaco } from './FormulaEngine';
+import { horaFracaoPlanilha } from './horaPlanilha';
 import { COLUNAS_HORAS_ROTAS, COLUNAS_HODOMETRO } from '../config/modeloColetaCaminhao';
 
 /** Distância operacional plausível por trecho de rota (não hodômetro bruto). */
@@ -32,7 +33,8 @@ function detectarColuna(dados: Record<string, any>[], candidatos: string[]): str
 
 /** Diff entre saída e chegada (horas), com virada de dia — mesma regra de HORAS_PRODUTIVAS(). */
 export function diffHorasSaidaChegada(saida: number, chegada: number): number {
-  if (saida <= 0 || chegada <= 0) return 0;
+  // 0 na chegada é meia-noite, não ausência. Ausência chega como NaN.
+  if (!(saida > 0) || !(chegada >= 0) || !Number.isFinite(saida) || !Number.isFinite(chegada)) return 0;
   let diff = 0;
   if (saida < 1 && chegada < 1) {
     diff = chegada < saida ? (chegada + 1 - saida) * 24 : (chegada - saida) * 24;
@@ -53,16 +55,38 @@ function lerHoraCampo(obj: Record<string, any>, ...candidatos: string[]): number
 }
 
 function lerNumeroPelaNormaEspaco(fonte: Record<string, any>, nome: string): number {
-  if (fonte[nome] !== undefined && fonte[nome] !== null && fonte[nome] !== '') {
-    const direto = typeof fonte[nome] === 'number' ? fonte[nome] : parseNumeroBr(fonte[nome]);
-    if (!isNaN(direto) && direto > 0) return direto;
-  }
-  for (const valor of valoresPorNormaEspaco(fonte, nome)) {
+  const presente = lerNumeroPresente(fonte, nome);
+  return presente == null ? 0 : presente;
+}
+
+/** null quando a célula não existe. 0 é meia-noite. */
+function lerNumeroPresente(fonte: Record<string, any>, nome: string): number | null {
+  const candidatos: unknown[] = [];
+  if (fonte[nome] !== undefined) candidatos.push(fonte[nome]);
+  candidatos.push(...valoresPorNormaEspaco(fonte, nome));
+  for (const valor of candidatos) {
     if (valor === undefined || valor === null || valor === '') continue;
-    const n = typeof valor === 'number' ? valor : parseNumeroBr(valor);
-    if (!isNaN(n) && n > 0) return n;
+    const n = /HORA/i.test(nome)
+      ? horaFracaoPlanilha(valor)
+      : (typeof valor === 'number' ? valor : parseNumeroBr(valor));
+    if (n != null && !Number.isNaN(n) && n >= 0) return n;
   }
-  return 0;
+  return null;
+}
+
+function lerHoraPresente(obj: Record<string, any>, ...candidatos: string[]): number | null {
+  if (!obj) return null;
+  const fontes: Record<string, any>[] = [];
+  if (obj.dados && typeof obj.dados === 'object' && !Array.isArray(obj.dados)) fontes.push(obj.dados);
+  fontes.push(obj);
+  for (const fonte of fontes) {
+    for (const nome of candidatos) {
+      if (!nome) continue;
+      const n = lerNumeroPresente(fonte, nome);
+      if (n != null) return n;
+    }
+  }
+  return null;
 }
 
 /** Leitura estrita (sem fuzzy contains) — evita confundir HORA SAÍDA ROTA com horaSaida da base. */
@@ -259,9 +283,15 @@ export function calcularVelocidadeColetaRegistro(obj: Record<string, any>): numb
 export function calcularHorasTotaisForaUnidadeRegistro(obj: Record<string, any>): number {
   if (!obj) return 0;
 
-  const saidaBase = lerHoraSaidaBase(obj);
-  const chegadaBase = lerHoraChegadaBase(obj);
-  if (saidaBase > 0 && chegadaBase > 0) {
+  const saidaBase = lerHoraPresente(
+    obj,
+    'HORA SÁIDA BASE',
+    'HORA SAIDA BASE',
+    'HORA SÁIDA  BASE',
+    'HORA SAIDA  BASE',
+  );
+  const chegadaBase = lerHoraPresente(obj, 'HORA CHEGADA BASE', 'HORA CHEGA BASE');
+  if (saidaBase != null && saidaBase > 0 && chegadaBase != null) {
     return diffHorasSaidaChegada(saidaBase, chegadaBase);
   }
 
@@ -355,8 +385,12 @@ export function calcularHorasProdutivasTotal(dados: Record<string, any>[]): numb
   if (colHoraChegada && colHora && colHoraChegada !== colHora) {
     let total = 0;
     for (const d of dados) {
-      const saida = Number(encontrarValorColuna(d, colHora)) || 0;
-      const chegada = Number(encontrarValorColuna(d, colHoraChegada)) || 0;
+      const saidaRaw = encontrarValorColuna(d, colHora);
+      const chegadaRaw = encontrarValorColuna(d, colHoraChegada);
+      if (saidaRaw == null || saidaRaw === '' || chegadaRaw == null || chegadaRaw === '') continue;
+      const saida = horaFracaoPlanilha(saidaRaw);
+      const chegada = horaFracaoPlanilha(chegadaRaw);
+      if (saida == null || chegada == null) continue;
       total += diffHorasSaidaChegada(saida, chegada);
     }
     if (total > 0) return Math.round(total * 100) / 100;

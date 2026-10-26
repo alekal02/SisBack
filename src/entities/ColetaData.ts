@@ -46,6 +46,10 @@ export class ColetaData {
   @Column('varchar', { length: 10, nullable: true })
   placa!: string | null;
 
+  /** Fora do padrão AAA9999 / AAA9A99. O valor de placa já vai sem hífen e em maiúsculas. */
+  @Column('boolean', { default: false })
+  placaSuspeita!: boolean;
+
   @Column('varchar', { length: 100, nullable: true })
   motorista!: string | null;
 

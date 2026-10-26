@@ -32,7 +32,7 @@ import {
   type TipoServicoUnificado,
 } from './servicosUnificadosPlanilhaParser';
 import { persistirArquivoOriginalUpload } from './planilhaOriginalStorage';
-import { carregarChavesProducaoExistentes, filtrarColetasProducaoNovas } from './producaoDedupService';
+import { carregarChavesProducaoExistentes, filtrarColetasProducaoNovas, quantitativoUnicoProducao } from './producaoDedupService';
 import { executarImportacaoAtomica } from './substituicaoImportacaoProducao';
 
 export interface ResultadoImportUnificadoServico {
@@ -203,19 +203,22 @@ class ServicosUnificadosImportService {
     }
 
     const existentes = await carregarChavesProducaoExistentes(servico.id, manager);
-    const { novas, ignoradas: ignoradasDuplicadas } = filtrarColetasProducaoNovas(
+    const { novas, ignoradas: ignoradasDuplicadas, repetidasNoArquivo, jaNoSistema } = filtrarColetasProducaoNovas(
       linhas,
       (l) => this.montarColeta(l, 0),
       existentes,
     );
     const avisosCiclo = [
       ...prep.avisos,
-      ...(ignoradasDuplicadas > 0
-        ? [`${ignoradasDuplicadas} linha(s) de "${servico.nome}" já estavam no sistema e não foram importadas de novo.`]
+      ...(repetidasNoArquivo > 0
+        ? [`${repetidasNoArquivo} linha(s) de "${servico.nome}" repetida(s) no arquivo e não foram importadas de novo.`]
+        : []),
+      ...(jaNoSistema > 0
+        ? [`${jaNoSistema} linha(s) de "${servico.nome}" já estavam no sistema e não foram importadas de novo.`]
         : []),
     ];
     if (novas.length === 0) {
-      const quantitativoTotal = Math.round(linhas.reduce((s, l) => s + l.quantitativo, 0) * 1000) / 1000;
+      const quantitativoTotal = quantitativoUnicoProducao(linhas, (l) => this.montarColeta(l, 0));
       const dias = new Set(linhas.map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null)).filter(Boolean)).size;
       const bairros = new Set(linhas.map((l) => l.bairro).filter(Boolean)).size;
       return {

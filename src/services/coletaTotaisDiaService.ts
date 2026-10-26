@@ -20,6 +20,8 @@ function metricasDeLinha(row: ColetaTotaisDia): MetricasColetaSql {
   return {
     registros: row.registros,
     viagens: row.viagens,
+    viagensComKm: row.viagensComKm || 0,
+    pesoKgComKm: row.pesoKgComKm || 0,
     pesoTotalKg: row.pesoKg,
     pesoTotalTon: Math.round((row.pesoKg / 1000) * 100) / 100,
     kmTotal: row.kmTotal,
@@ -42,7 +44,10 @@ export async function lerTotaisDia(
   const row = await repo.findOne({
     where: { servicoId, data: isoParaDateUtc(dataIso) },
   });
-  return row ? metricasDeLinha(row) : null;
+  if (!row) return null;
+  // Cache antigo não separava viagens com KM. Recalcula em vez de zerar a média.
+  if (row.kmTotal > 0 && !(row.viagensComKm > 0)) return null;
+  return metricasDeLinha(row);
 }
 
 async function gravarTotais(
@@ -60,6 +65,8 @@ async function gravarTotais(
   row.contractId = contractId;
   row.registros = m.registros;
   row.viagens = m.viagens;
+  row.viagensComKm = m.viagensComKm;
+  row.pesoKgComKm = m.pesoKgComKm;
   row.pesoKg = m.pesoTotalKg;
   row.kmTotal = m.kmTotal;
   row.horasProdutivas = m.horasProdutivas;

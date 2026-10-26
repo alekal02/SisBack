@@ -19,6 +19,7 @@ import {
 import { decomporJornadaRegistro, type JornadaDecomposta } from './jornadaTrechosService';
 import { calcularPesoIdealViagem, densidadeOptsToInput } from './relatorioDia/escalaIdealPeso';
 import { montarViagensPesoDoRegistro, type ViagemPesoRotaItem } from './viagemPesoRotaService';
+import { fecharRazaoKm } from './kmValido';
 import {
   classificarTempoPorTipo,
   tempoParaEncherPorMedia,
@@ -28,6 +29,8 @@ import {
 export interface MetricasColetaSql {
   registros: number;
   viagens: number;
+  viagensComKm: number;
+  pesoKgComKm: number;
   pesoTotalKg: number;
   pesoTotalTon: number;
   kmTotal: number;
@@ -50,6 +53,8 @@ export interface LinhaRankingColeta {
   horasProdutivas: number;
   tonPorViagem: number;
   kmPorViagem: number;
+  tonPorKm: number;
+  pctViagensKmValido: number;
   placa?: string;
   /** Tipo predominante do grupo (placa/motorista) — para eficiência vs ideal. */
   tipoCaminhao?: string;
@@ -156,6 +161,14 @@ function mapRanking(rows: any[]): LinhaRankingColeta[] {
     const kmTotal = round2(Number(r.km_total || 0));
     const horas = round2(Number(r.horas || 0));
     const tipoRaw = r.tipo_caminhao != null ? String(r.tipo_caminhao).trim() : '';
+    const viagensComKm = Number(r.viagens_km ?? viagens);
+    const pesoKgComKm = Number(r.peso_kg_km ?? pesoKg);
+    const razao = fecharRazaoKm({
+      viagens,
+      viagensComKm,
+      km: Number(r.km_total || 0),
+      tonComKm: pesoKgComKm / 1000,
+    });
     return {
       chave: label,
       label,
@@ -164,7 +177,9 @@ function mapRanking(rows: any[]): LinhaRankingColeta[] {
       kmTotal,
       horasProdutivas: horas,
       tonPorViagem: viagens > 0 ? round2(tonelagem / viagens) : 0,
-      kmPorViagem: viagens > 0 ? round2(kmTotal / viagens) : 0,
+      kmPorViagem: razao.kmPorViagem,
+      tonPorKm: razao.tonPorKm,
+      pctViagensKmValido: razao.pctViagensKmValido,
       placa: r.placa ? String(r.placa) : undefined,
       tipoCaminhao: tipoRaw || undefined,
     };
@@ -197,7 +212,7 @@ export async function getMetricasColetaSql(
 
   const uploadIds = uploadIdsConhecidos ?? await getUploadIds(servicoId);
   const vazio: MetricasColetaSql = {
-    registros: 0, viagens: 0, pesoTotalKg: 0, pesoTotalTon: 0, kmTotal: 0,
+    registros: 0, viagens: 0, viagensComKm: 0, pesoKgComKm: 0, pesoTotalKg: 0, pesoTotalTon: 0, kmTotal: 0,
     horasProdutivas: 0, placas: 0, motoristas: 0, regionais: 0, distritos: 0,
     somaColetores: 0, faturamento: 0, fatPorTipo: {},
   };
@@ -210,6 +225,8 @@ export async function getMetricasColetaSql(
       `${sqlExprPesoEfetivoKg('c')} AS peso_kg`,
       `${sqlExprViagensLinha('c')} AS viagens`,
       'COALESCE(c."kmTotal", 0) AS km',
+      `CASE WHEN COALESCE(c."kmTotal", 0) > 0 THEN ${sqlExprViagensLinha('c')} ELSE 0 END AS viagens_km`,
+      `CASE WHEN COALESCE(c."kmTotal", 0) > 0 THEN ${sqlExprPesoEfetivoKg('c')} ELSE 0 END AS peso_kg_km`,
       `CASE WHEN c."horasForaUnidade" BETWEEN 0 AND 24 THEN c."horasForaUnidade" ELSE 0 END AS horas`,
       'COALESCE(c."numeroColetores", 0) AS coletores',
       `c."tipoCaminhao" AS tipo_bruto`,
@@ -221,7 +238,9 @@ export async function getMetricasColetaSql(
       `COALESCE(NULLIF(TRIM(t.tipo_bruto), ''), 'Não informado') AS tipo`,
       'COUNT(*)::int AS registros',
       'COALESCE(SUM(t.viagens), 0) AS viagens',
+      'COALESCE(SUM(t.viagens_km), 0) AS viagens_km',
       'COALESCE(SUM(t.peso_kg), 0) AS peso_kg',
+      'COALESCE(SUM(t.peso_kg_km), 0) AS peso_kg_km',
       'COALESCE(SUM(t.km), 0) AS km_total',
       'COALESCE(SUM(t.horas), 0) AS horas',
       'COALESCE(SUM(t.coletores), 0) AS soma_coletores',
@@ -255,6 +274,8 @@ export async function getMetricasColetaSql(
   return {
     registros: Number(total?.registros || 0),
     viagens: Number(total?.viagens || 0),
+    viagensComKm: Number(total?.viagens_km || 0),
+    pesoKgComKm: Number(total?.peso_kg_km || 0),
     pesoTotalKg: pesoKg,
     pesoTotalTon: round2(pesoKg / 1000),
     kmTotal: round2(Number(total?.km_total || 0)),
@@ -302,7 +323,9 @@ export async function getAgregacaoColeta(
   const selectGrupo = (labelExpr: string) => [
     `${labelExpr} AS label`,
     `${sqlSumViagens('c')} AS viagens`,
+    `COALESCE(SUM(CASE WHEN COALESCE(c."kmTotal", 0) > 0 THEN ${sqlExprViagensLinha('c')} ELSE 0 END), 0) AS viagens_km`,
     `${sqlSumPesoEfetivoKg('c')} AS peso_kg`,
+    `COALESCE(SUM(CASE WHEN COALESCE(c."kmTotal", 0) > 0 THEN ${sqlExprPesoEfetivoKg('c')} ELSE 0 END), 0) AS peso_kg_km`,
     'COALESCE(SUM(COALESCE(c."kmTotal", 0)), 0) AS km_total',
     `COALESCE(SUM(CASE WHEN c."horasForaUnidade" BETWEEN 0 AND 24 THEN c."horasForaUnidade" ELSE 0 END), 0) AS horas`,
   ];
@@ -985,7 +1008,8 @@ export async function getRankingsColetaSql(
     horasProdutivas: m.horasProdutivas,
     tonPorViagem: m.tonPorViagem,
     kmPorViagem: m.kmPorViagem,
-    tonPorKm: m.kmTotal > 0 ? round2((m.tonelagem / m.kmTotal) * 10000) / 10000 : 0,
+    tonPorKm: m.tonPorKm,
+    pctViagensKmValido: m.pctViagensKmValido,
     tonPorHora: m.horasProdutivas > 0 ? round2(m.tonelagem / m.horasProdutivas) : 0,
   }));
   const coletores = agg.porPlaca.map((p) => ({
@@ -1078,10 +1102,20 @@ export function resolverKpiColetaSql(
     return div(m.pesoTotalTon, m.viagens);
   }
   if (/^DIVIDE\(SUM\(KM_TOTAL\),VIAGENS_POR_ROTA\(\)\)$/i.test(compact)) {
-    return div(m.kmTotal, m.viagens);
+    return fecharRazaoKm({
+      viagens: m.viagens,
+      viagensComKm: m.viagensComKm,
+      km: m.kmTotal,
+      tonComKm: m.pesoKgComKm / 1000,
+    }).kmPorViagem;
   }
   if (/^DIVIDE\(SUM\(PESO_TOTAL\)\/1000,SUM\(KM_TOTAL\)\)$/i.test(compact)) {
-    return div(m.pesoTotalTon, m.kmTotal);
+    return fecharRazaoKm({
+      viagens: m.viagens,
+      viagensComKm: m.viagensComKm,
+      km: m.kmTotal,
+      tonComKm: m.pesoKgComKm / 1000,
+    }).tonPorKm;
   }
   if (/^DIVIDE\(FATURAMENTO_EST\([^)]*\),SUM\(KM_TOTAL\)\)$/i.test(compact)) {
     return div(m.faturamento, m.kmTotal);
@@ -1113,6 +1147,12 @@ export function resolverKpiColetaSql(
 
 export function metricaExecutivaDeColetaSql(m: MetricasColetaSql, temValor: boolean) {
   const div = (a: number, b: number) => (b > 0 ? round2(a / b) : 0);
+  const razaoKm = fecharRazaoKm({
+    viagens: m.viagens,
+    viagensComKm: m.viagensComKm,
+    km: m.kmTotal,
+    tonComKm: m.pesoKgComKm / 1000,
+  });
   return {
     viagens: m.viagens,
     qtdColetores: m.placas,
@@ -1122,9 +1162,10 @@ export function metricaExecutivaDeColetaSql(m: MetricasColetaSql, temValor: bool
     horasMediaRotas: div(m.horasProdutivas, m.viagens),
     faturamento: m.faturamento,
     fatPorTipo: m.fatPorTipo,
-    tonKm: div(m.pesoTotalTon, m.kmTotal),
+    tonKm: razaoKm.tonPorKm,
+    pctViagensKmValido: razaoKm.pctViagensKmValido,
     prodColetor: div(m.pesoTotalTon, m.placas || m.somaColetores),
-    kmMedioViagem: div(m.kmTotal, m.viagens),
+    kmMedioViagem: razaoKm.kmPorViagem,
     tonMediaColeta: div(m.pesoTotalTon, m.viagens),
     receitaKm: div(m.faturamento, m.kmTotal),
     receitaHora: div(m.faturamento, m.horasProdutivas),

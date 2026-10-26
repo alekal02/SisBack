@@ -38,6 +38,17 @@ import { agendarWarmupPosUpload } from './executivoCacheWarmupService';
 import { normalizarTextoTipoCaminhao } from '../config/pesoMaximoCaminhao';
 import { numeroPlanilha } from './FormulaEngine';
 import { aplicarLimitesTextoColeta, textoMaisLongo, lerCampoDados } from '../utils/textoColunaColeta';
+import { nomeAbaColeta, linhasExcelPreenchidas, escolherChaveColuna } from './abaColeta';
+import { horaFracaoPlanilha } from './horaPlanilha';
+import { normalizarPlacaOuNull } from '../utils/normalizarPlaca';
+import { validarPlacaBr } from '../utils/validarPlacaBr';
+import {
+  MOTIVO_LINHA_IGNORADA,
+  dataMaisRecente,
+  dataSuspeitaAntesDaMaisRecente,
+  gravarLinhasIgnoradas,
+  type LinhaIgnoradaRegistro,
+} from './importacaoLinhaIgnorada';
 import {
   carregarHashesDia,
   decidirDatasRegravacao,
@@ -52,6 +63,7 @@ import {
  */
 interface LinhaParseada {
   raw: Record<string, any>;
+  linhaExcel: number;
   dataSaida: Date | null;
   placa: string | null;
   turno: string | null;
@@ -467,7 +479,9 @@ export class DeduplicacaoService {
     coleta.turno = linha.turno;
     coleta.regional = linha.regional;
     coleta.distrito = linha.distrito;
-    coleta.placa = linha.placa;
+    const placaNorm = normalizarPlacaOuNull(linha.placa);
+    coleta.placa = placaNorm ? placaNorm.slice(0, 10) : null;
+    coleta.placaSuspeita = Boolean(linha.placa && !validarPlacaBr(linha.placa).valida);
     coleta.motorista = linha.motorista;
     coleta.numeroColetores = linha.numeroColetores;
     coleta.kmSaida = linha.kmSaida;
@@ -498,18 +512,20 @@ export class DeduplicacaoService {
 
   private parsearLinhas(buffer: Buffer): LinhaParseada[] {
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
-    const nomeAba = workbook.SheetNames[0];
+    const nomeAba = nomeAbaColeta(workbook);
     const sheet = workbook.Sheets[nomeAba];
     const linhas: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, {
       defval: null,
       raw: true,
     });
+    const excel = linhasExcelPreenchidas(sheet);
 
-    return linhas.map((raw) => {
+    return linhas.map((raw, i) => {
       const dataSaida = this.parseDataSaida(raw);
 
       const linha: LinhaParseada = {
         raw,
+        linhaExcel: excel[i] || i + 2,
         dataSaida,
         placa: this.getStr(raw, 'PLACA'),
         turno: this.getStr(raw, 'TURNO'),
@@ -519,8 +535,8 @@ export class DeduplicacaoService {
         numeroColetores: this.getInt(raw, 'Nº DE COLETORES'),
         kmSaida: this.getNum(raw, 'KM SAIDA'),
         horaSaida: this.getNum(raw, 'HORA SÁIDA'),
-        kmChegada: this.getNum(raw, 'KM CHEGADA'),
-        horaChegada: this.getNum(raw, 'HORA CHEGADA'),
+        kmChegada: this.getNum(raw, 'KM CHEGADA BASE'),
+        horaChegada: this.getNum(raw, 'HORA CHEGADA BASE'),
         horaUltimoTerminoCarregamento: this.getNum(raw, 'HORA ULTIMO TÉRMINO DO CARREGAMENTO'),
         peso1: this.getNum(raw, 'PESO 1'),
         peso2: this.getNum(raw, 'PESO 2'),
@@ -584,20 +600,7 @@ export class DeduplicacaoService {
   }
 
   private encontrarChave(obj: any, key: string): string | null {
-    if (obj[key] !== undefined && obj[key] !== null) return key;
-    if (obj[key.trim()] !== undefined && obj[key.trim()] !== null) return key.trim();
-    if (obj[' ' + key + ' '] !== undefined && obj[' ' + key + ' '] !== null) return ' ' + key + ' ';
-    if (obj[' ' + key] !== undefined && obj[' ' + key] !== null) return ' ' + key;
-    if (obj[key + ' '] !== undefined && obj[key + ' '] !== null) return key + ' ';
-
-    const keyNorm = this.normalizarChave(key);
-    const chaves = Object.keys(obj);
-    for (const ch of chaves) {
-      const chNorm = this.normalizarChave(ch);
-      if (keyNorm.length > 0 && chNorm.includes(keyNorm)) return ch;
-      if (chNorm.length >= 5 && keyNorm.includes(chNorm)) return ch;
-    }
-    return null;
+    return escolherChaveColuna(obj, key, (s) => this.normalizarChave(s));
   }
 
   private getStr(obj: any, key: string): string | null {
@@ -613,7 +616,8 @@ export class DeduplicacaoService {
     const chave = this.encontrarChave(obj, key);
     if (!chave) return null;
     const valor = obj[chave];
-    if (valor === null || valor === undefined) return null;
+    if (valor === null || valor === undefined || valor === '') return null;
+    if (/HORA/i.test(key)) return horaFracaoPlanilha(valor);
     return numeroPlanilha(valor);
   }
 
@@ -844,6 +848,8 @@ export class DeduplicacaoService {
     let erros = 0;
     let viagensInconsistentes = 0;
     let viagensCorrigidas = 0;
+    const linhasIgnoradasRegistro: LinhaIgnoradaRegistro[] = [];
+    const chavesNoArquivo = new Set<string>();
 
     // 3. Identificar registros a excluir (se estratégia = substituir)
     if (estrategia === 'substituir' && analise.conflitantes.length > 0) {
@@ -866,12 +872,27 @@ export class DeduplicacaoService {
 
     // Função auxiliar para criar entidade ColetaData a partir de LinhaParseada
     const criarColetaSeValida = (linha: LinhaParseada): ColetaData | null => {
+      const chaveLinha = this.gerarChaveDeLinha(linha);
+      if (chavesNoArquivo.has(chaveLinha)) {
+        linhasIgnoradasRegistro.push({
+          linhaExcel: linha.linhaExcel,
+          motivo: MOTIVO_LINHA_IGNORADA.repetidaNoArquivo,
+        });
+        return null;
+      }
+      chavesNoArquivo.add(chaveLinha);
       const coleta = this.montarColetaDeLinha(linha, uploadSalvo.id);
       const validacao = prepararViagemParaImportacao(coleta);
       if (validacao.correcoes?.length) viagensCorrigidas++;
-      if (validacao.descartada) return null;
-      if (!validacao.validoDashboard) {
-        viagensInconsistentes++;
+      if (validacao.descartada || !validacao.validoDashboard) {
+        if (!validacao.validoDashboard) viagensInconsistentes++;
+        const semMedida = !((Number(coleta.kmTotal) || 0) > 0) && !((Number(coleta.pesoTotal) || 0) > 0);
+        linhasIgnoradasRegistro.push({
+          linhaExcel: linha.linhaExcel,
+          motivo: semMedida
+            ? MOTIVO_LINHA_IGNORADA.semKmESemPeso
+            : (validacao.motivos?.[0] || MOTIVO_LINHA_IGNORADA.semKmESemPeso),
+        });
         return null;
       }
       return coleta;
@@ -922,6 +943,13 @@ export class DeduplicacaoService {
 
     // Processar DUPLICADOS
     ignorados += analise.duplicados.length;
+    for (const item of analise.duplicados) {
+      linhasIgnoradasRegistro.push({
+        linhaExcel: item.dadosPlanilha.linhaExcel,
+        motivo: 'já estavam no sistema',
+      });
+    }
+    await gravarLinhasIgnoradas(uploadSalvo.id, linhasIgnoradasRegistro);
 
     // Salvar lote final
     if (batch.length > 0) {
@@ -1449,36 +1477,60 @@ export class DeduplicacaoService {
     }
 
     const datasSet = new Set(datasParaImportar);
+    const maisRecente = dataMaisRecente(linhas.map((l) => l.dataSaida));
+    const chavesNoArquivo = new Set<string>();
+    const linhasIgnoradasRegistro: LinhaIgnoradaRegistro[] = [];
 
     const pendentes: ColetaData[] = [];
     for (const linha of linhas) {
       if (!linha.dataSaida) {
         ignorados++;
+        linhasIgnoradasRegistro.push({ linhaExcel: linha.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.semData });
         continue;
       }
       const chaveData = linha.dataSaida.toISOString().slice(0, 10);
-
-      if (!datasSet.has(chaveData)) {
+      if (maisRecente && dataSuspeitaAntesDaMaisRecente(linha.dataSaida, maisRecente)) {
         ignorados++;
+        linhasIgnoradasRegistro.push({ linhaExcel: linha.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.dataSuspeita });
         continue;
       }
+      if (!datasSet.has(chaveData)) {
+        ignorados++;
+        linhasIgnoradasRegistro.push({ linhaExcel: linha.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.foraDoCiclo });
+        continue;
+      }
+      const chaveLinha = this.gerarChaveDeLinha(linha);
+      if (chavesNoArquivo.has(chaveLinha)) {
+        ignorados++;
+        linhasIgnoradasRegistro.push({ linhaExcel: linha.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.repetidaNoArquivo });
+        continue;
+      }
+      chavesNoArquivo.add(chaveLinha);
 
       try {
         const coleta = this.montarColetaDeLinha(linha, uploadSalvo.id);
         const validacao = prepararViagemParaImportacao(coleta);
         if (validacao.correcoes?.length) viagensCorrigidas++;
-        if (validacao.descartada) continue;
-        if (!validacao.validoDashboard) {
-          viagensInconsistentes++;
+        if (validacao.descartada || !validacao.validoDashboard) {
+          if (!validacao.validoDashboard) viagensInconsistentes++;
           ignorados++;
+          const semMedida = !((Number(coleta.kmTotal) || 0) > 0) && !((Number(coleta.pesoTotal) || 0) > 0);
+          linhasIgnoradasRegistro.push({
+            linhaExcel: linha.linhaExcel,
+            motivo: semMedida
+              ? MOTIVO_LINHA_IGNORADA.semKmESemPeso
+              : (validacao.motivos?.[0] || MOTIVO_LINHA_IGNORADA.semKmESemPeso),
+          });
           continue;
         }
         pendentes.push(coleta);
         importados++;
       } catch (err) {
-        // Linha com erro é ignorada
+        ignorados++;
+        linhasIgnoradasRegistro.push({ linhaExcel: linha.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.semData });
       }
     }
+    await gravarLinhasIgnoradas(uploadSalvo.id, linhasIgnoradasRegistro);
 
     const alvoDelete = estrategia === 'atualizar_data'
       ? (datasRegravar ?? datasUnicas)

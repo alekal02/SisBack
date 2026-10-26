@@ -29,6 +29,14 @@ export class ColetaTotaisDia {
   @Column('int', { default: 0 })
   viagens!: number;
 
+  /** Viagens cuja linha tem KM > 0. Entra no km/viagem e na ton/km. */
+  @Column('int', { default: 0 })
+  viagensComKm!: number;
+
+  /** Peso (kg) só das linhas com KM > 0. */
+  @Column('float', { default: 0 })
+  pesoKgComKm!: number;
+
   @Column('float', { default: 0 })
   pesoKg!: number;
 

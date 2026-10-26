@@ -27,6 +27,10 @@ import { invalidarCacheDashboardServico } from './comparacaoCache';
 import { recalcularTotaisDiaServicoSilencioso } from './coletaTotaisDiaService';
 import { normalizarTextoTipoCaminhao } from '../config/pesoMaximoCaminhao';
 import { numeroPlanilha } from './FormulaEngine';
+import { nomeAbaColeta, escolherChaveColuna } from './abaColeta';
+import { horaFracaoPlanilha } from './horaPlanilha';
+import { normalizarPlacaOuNull } from '../utils/normalizarPlaca';
+import { validarPlacaBr } from '../utils/validarPlacaBr';
 import { diffHorasSaidaChegada } from './horasProdutivasService';
 import { aplicarLimitesTextoColeta } from '../utils/textoColunaColeta';
 
@@ -113,7 +117,7 @@ export class PlanilhaService {
     const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
 
     // Pegar primeira aba (ou a que tiver dados)
-    const nomeAba = workbook.SheetNames[0];
+    const nomeAba = nomeAbaColeta(workbook);
     const sheet = workbook.Sheets[nomeAba];
 
     // Converter para JSON (raw para manter valores numéricos)
@@ -349,14 +353,17 @@ export class PlanilhaService {
     coleta.turno = this.getStr(linha, 'TURNO');
     coleta.regional = this.getStr(linha, 'REGIONAL');
     coleta.distrito = this.getStr(linha, 'DISTRITO');
-    coleta.placa = this.getStr(linha, 'PLACA');
+    const placaLida = this.getStr(linha, 'PLACA');
+    const placaNorm = normalizarPlacaOuNull(placaLida);
+    coleta.placa = placaNorm ? placaNorm.slice(0, 10) : null;
+    coleta.placaSuspeita = Boolean(placaLida && !validarPlacaBr(placaLida).valida);
     coleta.motorista = this.getStr(linha, 'MOTORISTA');
     coleta.numeroColetores = this.getInt(linha, 'Nº DE COLETORES');
 
     coleta.kmSaida = this.getNum(linha, 'KM SAIDA');
     coleta.horaSaida = this.getNum(linha, 'HORA SÁIDA');
-    coleta.kmChegada = this.getNum(linha, 'KM CHEGADA');
-    coleta.horaChegada = this.getNum(linha, 'HORA CHEGADA');
+    coleta.kmChegada = this.getNum(linha, 'KM CHEGADA BASE');
+    coleta.horaChegada = this.getNum(linha, 'HORA CHEGADA BASE');
     coleta.horaUltimoTerminoCarregamento = this.getNum(linha, 'HORA ULTIMO TÉRMINO DO CARREGAMENTO');
 
     coleta.peso1 = this.getNum(linha, 'PESO 1');
@@ -436,30 +443,7 @@ export class PlanilhaService {
    * 4. Match por normalização (nível 2)
    */
   private encontrarChave(obj: any, key: string): string | null {
-    // Nível 1: match exato ou com variações de espaços
-    if (obj[key] !== undefined && obj[key] !== null) return key;
-    if (obj[key.trim()] !== undefined && obj[key.trim()] !== null) return key.trim();
-    if (obj[' ' + key + ' '] !== undefined && obj[' ' + key + ' '] !== null) return ' ' + key + ' ';
-    if (obj[' ' + key] !== undefined && obj[' ' + key] !== null) return ' ' + key;
-    if (obj[key + ' '] !== undefined && obj[key + ' '] !== null) return key + ' ';
-
-    // Nível 2: normalização (remove acentos, espaços, sufixos)
-    const keyNorm = this.normalizarChave(key);
-    const chaves = Object.keys(obj);
-    for (const ch of chaves) {
-      const chNorm = this.normalizarChave(ch);
-      // Testa se a chave normalizada esperada está CONTIDA na chave real normalizada
-      // Ex: "KMSAIDA" está contido em "KMSAIDABASE" → match!
-      if (keyNorm.length > 0 && chNorm.includes(keyNorm)) {
-        return ch;
-      }
-      // Inverso só com chave real específica — senão "PESO 2" casa com "id"/"O"
-      if (chNorm.length >= 5 && keyNorm.includes(chNorm)) {
-        return ch;
-      }
-    }
-
-    return null;
+    return escolherChaveColuna(obj, key, (s) => this.normalizarChave(s));
   }
 
   private getStr(obj: any, key: string): string | null {
@@ -475,7 +459,8 @@ export class PlanilhaService {
     const chaveEncontrada = this.encontrarChave(obj, key);
     if (!chaveEncontrada) return null;
     const valor = obj[chaveEncontrada];
-    if (valor === null || valor === undefined) return null;
+    if (valor === null || valor === undefined || valor === '') return null;
+    if (/HORA/i.test(key)) return horaFracaoPlanilha(valor);
     return numeroPlanilha(valor);
   }
 
@@ -605,16 +590,16 @@ export class PlanilhaService {
       if (col && col.numerico !== null) coleta.horaSaida = col.numerico;
     }
 
-    // KM CHEGADA
-    if (!coleta.kmChegada) {
+    // KM CHEGADA na base — não usar KM CHEGADA ROTA
+    if (coleta.kmChegada == null) {
       const col = colunas.find(c =>
-        c.normalizada.includes('KMCHEGADA') || c.normalizada.includes('KMCHEGADAROTA')
+        c.normalizada.includes('KMCHEGADABASE') || c.normalizada === 'KMCHEGADA'
       );
       if (col && col.numerico !== null) coleta.kmChegada = col.numerico;
     }
 
-    // HORA CHEGADA na base — não usar HORA CHEGADA ROTA (início do trecho)
-    if (!coleta.horaChegada) {
+    // HORA CHEGADA na base. 00:00 (0) é meia-noite, não vazio.
+    if (coleta.horaChegada == null) {
       const col = colunas.find(c =>
         !c.normalizada.includes('ROTA')
         && (c.normalizada.includes('HORACHEGADABASE') || c.normalizada.includes('HRCHEGABASE') || c.normalizada === 'HORACHEGADA')

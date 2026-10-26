@@ -39,6 +39,7 @@ export interface PdfExecutivoParams {
     horasProdutivas: number;
     produtividadeColetor: number;
     kmMedioViagem: number;
+    pctViagensKmValido?: number;
     pesoMedioColeta: number;
   };
   volumeColetaSerie: { label: string; valor: number }[];
@@ -318,6 +319,7 @@ export function gerarHtmlRelatorioExecutivo(p: PdfExecutivoParams): string {
     ['Horas Produtivas', `${op.horasProdutivas.toFixed(1)}h`],
     ['Produtividade/Coletor', `${op.produtividadeColetor.toFixed(2)} t`],
     ['KM Médio/Viagem', `${op.kmMedioViagem.toFixed(1)} km`],
+    ['Viagens com KM válido', `${op.pctViagensKmValido ?? 0}%`],
     ['Peso Médio/Coleta', `${op.pesoMedioColeta.toFixed(2)} t`],
   ];
   const gridOp = `

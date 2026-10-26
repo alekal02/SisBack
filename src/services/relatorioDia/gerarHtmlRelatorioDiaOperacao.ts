@@ -386,8 +386,9 @@ function heroOperacaoHtml(op: OperacaoDiaAnalise['resumo'], extraSub = '') {
     </tr></thead>
     <tbody>
       <tr><td>Produtividade por veículo</td><td class="dest">${fmtNum(op.prodColetor, 2)} t</td><td>Volume médio por placa ativa</td></tr>
-      <tr><td>KM por viagem</td><td class="dest">${fmtNum(op.kmMedioViagem, 1)} km</td><td>Eficiência de deslocamento</td></tr>
-      <tr><td>Ton./KM</td><td class="dest">${fmtNum(op.tonKm, 3)}</td><td>Carga transportada por km rodado</td></tr>
+      <tr><td>KM por viagem</td><td class="dest">${fmtNum(op.kmMedioViagem, 1)} km</td><td>Só viagens com KM válido</td></tr>
+      <tr><td>Ton./KM</td><td class="dest">${fmtNum(op.tonKm, 3)}</td><td>Toneladas e km das viagens com KM válido</td></tr>
+      <tr><td>Viagens com KM válido</td><td class="dest">${fmtNum(op.pctViagensKmValido, 0)}%</td><td>Base do km/viagem e da ton/km</td></tr>
       <tr><td>Velocidade operacional</td><td class="dest">${fmtNum(kmH, 1)} km/h</td><td>KM rodado por hora produtiva</td></tr>
     </tbody>
   </table>`;

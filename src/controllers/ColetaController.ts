@@ -181,7 +181,7 @@ export class ColetaController {
         }
         const avisoCiclo = (resultado.avisos || []).find((a) => a.includes('ciclo já fechado') || a.includes('ciclo anterior'));
         if (avisoCiclo) mensagem += ` ${avisoCiclo}`;
-        const avisoDup = (resultado.avisos || []).find((a) => a.includes('já estavam no sistema'));
+        const avisoDup = (resultado.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
         if (avisoDup) mensagem += ` ${avisoDup}`;
         mensagem = anexarFraseDias(mensagem, resultado);
 
@@ -223,7 +223,7 @@ export class ColetaController {
         }
         const avisoCiclo = (resultado.avisos || []).find((a) => a.includes('ciclo já fechado') || a.includes('ciclo anterior'));
         if (avisoCiclo) mensagem += ` ${avisoCiclo}`;
-        const avisoDup = (resultado.avisos || []).find((a) => a.includes('já estavam no sistema'));
+        const avisoDup = (resultado.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
         if (avisoDup) mensagem += ` ${avisoDup}`;
 
         for (const s of resultado.splitPorServico || []) {
@@ -317,8 +317,8 @@ export class ColetaController {
           ...resultadoRocada,
           importadas: resultadoRocada.importados,
           mensagem: `Roçada importada em “${alvo.nome}” (${labelModeloRocada(resultadoRocada.modelo)}): ${resultadoRocada.importados} registro(s).${
-            (resultadoRocada.avisos || []).some((a) => a.includes('já estavam no sistema'))
-              ? ` ${(resultadoRocada.avisos || []).find((a) => a.includes('já estavam no sistema'))}`
+            (resultadoRocada.avisos || []).some((a) => a.includes('já estavam no sistema') || a.includes('repetida'))
+              ? ` ${(resultadoRocada.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'))}`
               : ''
           }`,
         });
