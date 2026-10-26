@@ -38,6 +38,7 @@ router.get('/uploads', authenticate, (req, res) => controller.uploads(req, res))
 router.get('/dados', authenticate, (req, res) => controller.dados(req, res));
 router.put('/dados/:id', authenticate, (req, res) => controller.atualizarDado(req, res));
 router.delete('/dados/:id', authenticate, (req, res) => controller.excluirDado(req, res));
+router.get('/uploads/:id/conferencia', authenticate, (req, res) => controller.conferencia(req, res));
 router.get('/uploads/:id/original', authenticate, (req, res) => controller.baixarOriginal(req, res));
 router.put('/uploads/:id/rename', authenticate, (req, res) => controller.renomearUpload(req, res));
 router.delete('/uploads/:id', authenticate, (req, res) => controller.excluirUpload(req, res));

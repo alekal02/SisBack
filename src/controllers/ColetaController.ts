@@ -36,10 +36,24 @@ import {
   type RelatorioAgenteUpload,
 } from '../services/agenteConferenciaUploadService';
 import { anexarFraseDias, fraseDiasHash, importacaoRegravouDados } from '../services/importacaoDiaHash';
+import {
+  conferenciaDoUpload,
+  gravarAlertasArquivoEm,
+  idsDeUploads,
+  planilhaConferenciaBuffer,
+} from '../services/conferenciaImportacaoService';
 
 // Extensão para request com file do multer
 interface RequestWithFile extends Request {
   file?: Express.Multer.File;
+}
+
+async function anotarConferenciaImportacao(buffer: Buffer, resultado: unknown): Promise<void> {
+  try {
+    await gravarAlertasArquivoEm(idsDeUploads(resultado), buffer);
+  } catch (err: any) {
+    console.warn('[Conferencia] alertas do arquivo:', err?.message || err);
+  }
 }
 
 async function conferirAgenteUpload(
@@ -193,6 +207,7 @@ export class ColetaController {
           }
           invalidarCacheSaudeContratos(contractId);
         }
+        await anotarConferenciaImportacao(file.buffer, resultado);
         res.json({
           sucesso: true,
           tipoDetectado: classificacao.tipo,
@@ -233,6 +248,7 @@ export class ColetaController {
         }
 
         invalidarCacheSaudeContratos(contractId);
+        await anotarConferenciaImportacao(file.buffer, resultado);
         res.json({
           sucesso: true,
           tipoDetectado: classificacao.tipo,
@@ -277,6 +293,7 @@ export class ColetaController {
           ? (resultado as { avisos: string[] }).avisos
           : [];
         const avisoCiclo = avisos.find((a) => a.includes('ciclo'));
+        await anotarConferenciaImportacao(file.buffer, resultado);
         const mensagemColeta = anexarFraseDias(
           avisoCiclo
             ? `Coleta importada em “${alvo.nome}”: ${qtd} registro(s). ${avisoCiclo}`
@@ -308,6 +325,7 @@ export class ColetaController {
         );
 
         invalidarCacheSaudeContratos(contractId);
+        await anotarConferenciaImportacao(file.buffer, resultadoRocada);
         res.json({
           sucesso: true,
           tipoDetectado: classificacao.tipo,
@@ -413,6 +431,7 @@ export class ColetaController {
               }
             }
           }
+          await anotarConferenciaImportacao(file.buffer, resultadoCons);
 
           res.json({
             sucesso: true,
@@ -453,6 +472,7 @@ export class ColetaController {
               await tentarMergePlacasContrato(s.servicoId, s.planilhaUploadId);
             }
           }
+          await anotarConferenciaImportacao(file.buffer, resultadoUnif);
 
           res.json({
             sucesso: true,
@@ -509,6 +529,7 @@ export class ColetaController {
           if (resultadoRocada.consolidacao?.uploadsRemovidos) {
             mensagem += ` ${resultadoRocada.consolidacao.uploadsRemovidos} planilha(s) antiga(s) removida(s).`;
           }
+          await anotarConferenciaImportacao(file.buffer, resultadoRocada);
 
           res.json({
             sucesso: true,
@@ -599,6 +620,8 @@ export class ColetaController {
         agendarWarmupPosUpload(servico_id);
         await tentarMergePlacasContrato(servico_id, resultado?.planilhaUploadId);
       }
+
+      await anotarConferenciaImportacao(file.buffer, resultado);
 
       let mensagem: string;
       if (estrategia === 'atualizar_data' || estrategia === 'inserir_data') {
@@ -954,6 +977,38 @@ export class ColetaController {
       res.status(status).json({ error: error.message || 'Erro ao listar uploads do dia.' });
     }
   }
+  /**
+   * GET /api/coleta/uploads/:id/conferencia
+   * Mesma conferência do WhatsApp. ?formato=xlsx baixa a planilha.
+   */
+  async conferencia(req: Request, res: Response): Promise<void> {
+    try {
+      const id = parseInt(String(req.params.id));
+      if (isNaN(id)) {
+        res.status(400).json({ error: 'ID inválido.' });
+        return;
+      }
+      if (await this.negarPorUploadId(req, res, id)) return;
+      const conferencia = await conferenciaDoUpload(id);
+      if (!conferencia) {
+        res.status(404).json({ error: 'Upload não encontrado.' });
+        return;
+      }
+      if (String(req.query.formato || '') === 'xlsx') {
+        const buffer = planilhaConferenciaBuffer(conferencia);
+        const nome = `conferencia-${id}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${nome}"`);
+        res.send(buffer);
+        return;
+      }
+      res.json(conferencia);
+    } catch (error: any) {
+      console.error('Erro ao montar conferência:', error);
+      res.status(500).json({ error: error.message || 'Erro ao montar conferência.' });
+    }
+  }
+
   /**
    * GET /api/coleta/uploads/:id/original
    * Devolve o arquivo guardado (disco, MinIO ou arquivos_storage).

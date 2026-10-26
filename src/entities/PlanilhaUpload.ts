@@ -50,6 +50,13 @@ export class PlanilhaUpload {
     modelo?: string;
     /** De onde veio o arquivo original (chatbot WhatsApp vs tela). */
     origem?: 'whatsapp' | 'web';
+    /** Sinais do arquivo que não ficam na linha importada (fórmula vazia, data da CONSOLIDADO). */
+    alertasArquivo?: {
+      formulaPesoTotalVazia: number[];
+      consolidadoDesatualizado: boolean;
+      dataConsolidado: string | null;
+      dataAbasServico: string | null;
+    };
     consolidacao?: {
       registrosRemovidosAusentes: number;
       uploadsRemovidos: number;

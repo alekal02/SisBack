@@ -23,6 +23,8 @@ import { filtrarColetasProducaoNovas } from './producaoDedupService';
 import { ColetaData } from '../entities/ColetaData';
 import { nomeAbaColeta, linhasExcelPreenchidas } from './abaColeta';
 import { razoesKmDeRegistros } from './kmValido';
+import { linhasFormulaPesoTotalVazia, montarConferencia } from './conferenciaImportacaoService';
+import { MOTIVO_LINHA_IGNORADA } from './importacaoLinhaIgnorada';
 
 const FIXTURES = path.join(__dirname, '..', '..', 'test', 'fixtures');
 
@@ -55,7 +57,7 @@ type ConsolidadoInterno = {
 function importarColetaComoUpload(buffer: Buffer): {
   lidas: number;
   importadas: ColetaData[];
-  ignoradas: Array<{ excel: number; motivos: string[] }>;
+  ignoradas: Array<{ excel: number; motivos: string[]; motivo: string }>;
 } {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false });
   const sheet = wb.Sheets[nomeAbaColeta(wb)];
@@ -70,16 +72,23 @@ function importarColetaComoUpload(buffer: Buffer): {
   );
 
   const importadas: ColetaData[] = [];
-  const ignoradas: Array<{ excel: number; motivos: string[] }> = [];
+  const ignoradas: Array<{ excel: number; motivos: string[]; motivo: string }> = [];
   linhas.forEach((linha, i) => {
     if (!linha.dataSaida) {
-      ignoradas.push({ excel: excel[i], motivos: ['sem data'] });
+      ignoradas.push({ excel: excel[i], motivos: ['sem data'], motivo: MOTIVO_LINHA_IGNORADA.semData });
       return;
     }
     const coleta = dedup.montarColetaDeLinha(linha, 0);
     const validacao = prepararViagemParaImportacao(coleta);
     if (validacao.descartada || !validacao.validoDashboard) {
-      ignoradas.push({ excel: excel[i], motivos: validacao.motivos || [] });
+      const semMedida = !((Number(coleta.kmTotal) || 0) > 0) && !((Number(coleta.pesoTotal) || 0) > 0);
+      ignoradas.push({
+        excel: excel[i],
+        motivos: validacao.motivos || [],
+        motivo: semMedida
+          ? MOTIVO_LINHA_IGNORADA.semKmESemPeso
+          : (validacao.motivos?.[0] || MOTIVO_LINHA_IGNORADA.semKmESemPeso),
+      });
       return;
     }
     importadas.push(coleta);
@@ -274,6 +283,26 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
     if (razao.pctViagensKmValido !== 78) diffs.push(`% KM válido ${razao.pctViagensKmValido} (esperado 78)`);
 
     assert.equal(diffs.length, 0, diffs.join('; '));
+  });
+
+  it('coleta: conferência traz os números da mensagem', () => {
+    const r = importarColetaComoUpload(coletaBuf);
+    const conf = montarConferencia({
+      nome: 'Coleta Aparecida',
+      registros: r.importadas,
+      ignoradas: r.ignoradas.map((i) => ({ linhaExcel: i.excel, motivo: i.motivo })),
+      lidas: r.lidas,
+      formulaPesoTotalVazia: linhasFormulaPesoTotalVazia(coletaBuf),
+    });
+    assert.equal(
+      conf.mensagem,
+      [
+        '✅ Planilha recebida — Coleta Aparecida — 25/09 a 23/10',
+        'Linhas: 935 lidas · 932 importadas · 3 ignoradas (linhas 817, 818, 858: sem km e sem peso)',
+        'Totais: 11.069,39 t · 1.539 viagens · 61,6 km/viagem · 78% com KM válido',
+        '⚠️ Alertas: hodômetro não preenchido em 203 viagens · placa suspeita SDG646 (4 linhas) · fórmula PESO TOTAL vazia em 35 linhas',
+      ].join('\n'),
+    );
   });
 
   it('coleta: dashboard do serviço, executivo e relatório do dia coincidem', () => {

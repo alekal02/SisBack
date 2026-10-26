@@ -32,9 +32,14 @@ import {
 import { textoMereceProcessamento } from './WhatsappComandoRelatorioTexto';
 import {
   analisarConferenciaPlanilhaVsSistema,
-  textoAgenteWhatsapp,
   type RelatorioAgenteUpload,
 } from './agenteConferenciaUploadService';
+import {
+  conferenciaDoUpload,
+  gravarAlertasArquivoEm,
+  idsDeUploads,
+  mensagemWhatsappDeConferencias,
+} from './conferenciaImportacaoService';
 import {
   codigoFalhaMensagem,
   decidirRetomadaAposQueda,
@@ -342,6 +347,7 @@ type AlvoImportWhatsapp = {
 
 type ResultadoImportWhatsapp = {
   planilhaUploadId?: number;
+  planilhaUploadIds?: number[];
   importadas: number;
   totalLinhas?: number;
   tipoDetectado: string;
@@ -398,6 +404,7 @@ async function importarPlanilha(
     const mioloProducao = [partes.join(' · '), fraseDias, avisoDup || ''].filter(Boolean).join('. ');
     return {
       planilhaUploadId: r.planilhaUploadId,
+      planilhaUploadIds: idsDeUploads(r),
       importadas: r.importados,
       totalLinhas: r.totalLinhas,
       tipoDetectado: classificacao.tipo,
@@ -437,6 +444,7 @@ async function importarPlanilha(
     const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
     return {
       planilhaUploadId: r.planilhaUploadId,
+      planilhaUploadIds: idsDeUploads(r),
       importadas: r.importados,
       totalLinhas: r.totalLinhas,
       tipoDetectado: classificacao.tipo,
@@ -484,6 +492,7 @@ async function importarPlanilha(
     }
     return {
       planilhaUploadId: r.planilhaUploadId,
+      planilhaUploadIds: idsDeUploads(r),
       importadas: qtd,
       totalLinhas: r.totalLinhas,
       tipoDetectado: classificacao.tipo,
@@ -508,6 +517,7 @@ async function importarPlanilha(
     const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
     return {
       planilhaUploadId: r.planilhaUploadId,
+      planilhaUploadIds: idsDeUploads(r),
       importadas: r.importados,
       totalLinhas: r.totalLinhas,
       tipoDetectado: classificacao.tipo,
@@ -868,8 +878,16 @@ export class WhatsappPlanilhaPipelineService {
     const { buffer, nomeArquivo: nomeRaw } = await obterBufferPlanilha(payload, doc);
     const nomeArquivo = EXT_PLANILHA.test(nomeRaw) ? nomeRaw : `${nomeRaw.replace(/\.[^.]+$/, '') || 'planilha'}.xlsx`;
     const importResult = await importarPlanilha(buffer, nomeArquivo, servico, mapa.estrategia);
-    if (importResult.planilhaUploadId) {
-      await marcarOrigemPlanilhaUpload(importResult.planilhaUploadId, 'whatsapp');
+    const idsUpload = importResult.planilhaUploadIds?.length
+      ? importResult.planilhaUploadIds
+      : (importResult.planilhaUploadId ? [importResult.planilhaUploadId] : []);
+    for (const id of idsUpload) {
+      await marcarOrigemPlanilhaUpload(id, 'whatsapp');
+    }
+    try {
+      await gravarAlertasArquivoEm(idsUpload, buffer);
+    } catch (err: any) {
+      console.warn('[WhatsappPipeline] Alertas da conferência:', err?.message || err);
     }
 
     return this.posImport(servico, grupoJid, nomeArquivo, importResult);
@@ -906,6 +924,18 @@ export class WhatsappPlanilhaPipelineService {
       }
     }
 
+    const idsUpload = importResult.planilhaUploadIds?.length
+      ? importResult.planilhaUploadIds
+      : (importResult.planilhaUploadId ? [importResult.planilhaUploadId] : []);
+    const conferencias = [];
+    for (const id of idsUpload) {
+      const conferencia = await conferenciaDoUpload(id);
+      if (conferencia) conferencias.push(conferencia);
+    }
+    const nomeGrupo = conferencias.length > 1 && conferencias.every((c) => c.tipo === 'producao')
+      ? 'Produção'
+      : undefined;
+    const textoConferencia = mensagemWhatsappDeConferencias(conferencias, nomeGrupo);
     const servicosTxt = importResult.alvos
       .filter((a) => a.importados > 0)
       .map((a) => `${a.servicoNome} (${a.importados})`)
@@ -920,15 +950,17 @@ export class WhatsappPlanilhaPipelineService {
     const cabeca = fraseDias && importResult.importadas === 0 && (importResult.diasIguais ?? 0) > 0
       ? `✅ Planilha já estava igual. ${fraseDias}.`
       : `✅ ${importResult.importadas} registro(s) importado(s)`;
-    const resumo = [
-      cabeca,
-      fraseDias && importResult.importadas > 0 ? fraseDias : null,
-      servicosTxt ? servicosTxt : null,
-      `Contrato: ${contratoNome}`,
-      diasTxt ? `Último dia: ${diasTxt}` : null,
-      importResult.conferencia ? `📋 ${textoAgenteWhatsapp(importResult.conferencia)}` : null,
-      'Para o PDF, envie *dia 16/09* com a data desejada. Saúde: *saude*.',
-    ].filter(Boolean).join('\n');
+    const rodape = 'Para o PDF, envie *dia 16/09* com a data desejada. Saúde: *saude*.';
+    const resumo = textoConferencia
+      ? `${textoConferencia}\n${rodape}`
+      : [
+        cabeca,
+        fraseDias && importResult.importadas > 0 ? fraseDias : null,
+        servicosTxt ? servicosTxt : null,
+        `Contrato: ${contratoNome}`,
+        diasTxt ? `Último dia: ${diasTxt}` : null,
+        rodape,
+      ].filter(Boolean).join('\n');
     try {
       await wuzapiService.enviarTexto(grupoJid, resumo);
     } catch { /* ignore */ }
