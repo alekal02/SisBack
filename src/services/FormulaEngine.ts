@@ -3,6 +3,7 @@ import { contarColetoresUnicos, calcularMediaTonPorColetorViagem } from './colet
 import { contarMotoristasUnicos, contarPlacasUnicas, contarDistritosUnicos } from './contadoresAtivosKpiService';
 import { colunaEhPlaca, normalizarPlaca } from '../utils/normalizarPlaca';
 import { resolverValorUnitarioPorTipo } from '../config/pesoMaximoCaminhao';
+import { marcarBloco } from './executivoBlocos';
 
 /**
  * FormulaEngine — Motor de Formulas para KPIs
@@ -125,13 +126,27 @@ function extrairFuncoesAgregadas(expressao: string): FuncaoExtraida[] {
   return funcoes;
 }
 
+function valorComoCopia(d: Record<string, any>, coluna: string): any {
+  let escolhido = d[coluna];
+  if (!escolhido) {
+    const alvo = normalizarChave(coluna);
+    for (const [chave, valor] of Object.entries(d)) {
+      if (chave === coluna || normalizarChave(chave) !== alvo) continue;
+      escolhido = valor;
+      if (escolhido) break;
+    }
+  }
+  if (escolhido !== undefined && escolhido !== null) return escolhido;
+  return encontrarValorColuna(d, coluna);
+}
+
 function aplicarAgregacao(funcao: Agregacao, coluna: string, dados: Record<string, any>[]): number {
   if (funcao === 'COUNT' && coluna === '*') return dados.length;
   if (funcao === 'COUNT DISTINCT') {
     const valores = new Set(
       dados
         .map((d) => {
-          const v = encontrarValorColuna(d, coluna);
+          const v = valorComoCopia(d, coluna);
           if (v === null || v === undefined || v === '') return null;
           if (colunaEhPlaca(coluna)) return normalizarPlaca(String(v)) || null;
           return v;
@@ -140,7 +155,12 @@ function aplicarAgregacao(funcao: Agregacao, coluna: string, dados: Record<strin
     );
     return valores.size;
   }
-  const valores = dados.map(d => { const v = encontrarValorColuna(d, coluna); if (v === null || v === undefined) return NaN; const n = parseNumeroBr(v); return isNaN(n) ? NaN : n; }).filter(n => !isNaN(n));
+  const valores = dados.map(d => {
+    const v = valorComoCopia(d, coluna);
+    if (v === null || v === undefined) return NaN;
+    const n = parseNumeroBr(v);
+    return isNaN(n) ? NaN : n;
+  }).filter(n => !isNaN(n));
   if (valores.length === 0) return 0;
   switch (funcao) {
     case 'SUM': return valores.reduce((a, b) => a + b, 0);
@@ -212,8 +232,15 @@ export function numeroPlanilha(valor: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const cacheNorma = new Map<string, string>();
+const cacheNormaEspaco = new Map<string, string>();
+
 export function normalizarChave(chave: string): string {
-  return chave.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s_\-\(\)\[\]\/\\,\.;:]+/g, '').replace(/[^A-Z0-9]/g, '');
+  const pronta = cacheNorma.get(chave);
+  if (pronta !== undefined) return pronta;
+  const nova = chave.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s_\-\(\)\[\]\/\\,\.;:]+/g, '').replace(/[^A-Z0-9]/g, '');
+  cacheNorma.set(chave, nova);
+  return nova;
 }
 
 /**
@@ -232,73 +259,222 @@ const COLUNA_SINONIMOS: Record<string, string[]> = {
   'TURNO': ['TURNO', 'PERIODO', 'TURNO BASE', 'TURNO_BASE'],
 };
 
-export function encontrarValorColuna(dado: Record<string, any>, nomeColuna: string): any {
-  if (!dado || !nomeColuna) return undefined;
-  
-  // Nível 0: match exato
-  if (dado[nomeColuna] !== undefined && dado[nomeColuna] !== null) return dado[nomeColuna];
-  
-  const chaveNorm = normalizarChave(nomeColuna);
-  
-  // Nível 1: normalização
-  for (const [k, v] of Object.entries(dado)) { if (v !== null && v !== undefined && normalizarChave(k) === chaveNorm) return v; }
-  
-  // Nível 2: sem espaços
-  const semEspaco = chaveNorm.replace(/\s+/g, '');
-  for (const [k, v] of Object.entries(dado)) { if (v !== null && v !== undefined && normalizarChave(k).replace(/\s+/g, '') === semEspaco) return v; }
-  
-  // Nível 3: a coluna contém o nome buscado (ex.: "PESO TOTAL KG" ⊃ "PESOTOTAL").
-  // NÃO inverter (semEspaco.includes(chaveReal)): "PESO2".includes("ID") / tokens vazios
-  // faziam o id da linha virar PESO 2–5 e inflar o PESO TOTAL.
-  for (const [k, v] of Object.entries(dado)) {
-    if (v === null || v === undefined) continue;
-    if (buscaKmDeDistancia(nomeColuna) && colunaEhHodometro(k)) continue;
-    const chaveReal = normalizarChave(k).replace(/\s+/g, '');
-    if (chaveReal.length >= 4 && chaveReal.includes(semEspaco)) return v;
-    if (chaveReal.length >= 5 && chaveReal.length >= semEspaco.length - 1 && semEspaco.includes(chaveReal)) return v;
+/** Só tira acento e espaço. A leitura estrita de hora/KM usa esta forma, não a da fórmula. */
+export function normalizarChaveEspaco(chave: string): string {
+  const pronta = cacheNormaEspaco.get(chave);
+  if (pronta !== undefined) return pronta;
+  const nova = chave.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
+  cacheNormaEspaco.set(chave, nova);
+  return nova;
+}
+
+interface EsquemaColuna {
+  hash: number;
+  chaves: string[];
+  normas: string[];
+  espacos: string[];
+  hodometro: Uint8Array;
+  candidatos: Map<string, string[]>;
+  atalho: Map<string, string>;
+  porEspaco: Map<string, string[]>;
+}
+
+const esquemasPorHash = new Map<number, EsquemaColuna[]>();
+const esquemaDaLinha = new WeakMap<object, EsquemaColuna>();
+
+export function totalEsquemasColuna(): number {
+  let total = 0;
+  for (const lista of esquemasPorHash.values()) total += lista.length;
+  return total;
+}
+
+export function invalidarEsquemaColuna(dado: object): void {
+  esquemaDaLinha.delete(dado);
+}
+
+function mesmoEsquema(esquema: EsquemaColuna, chaves: string[]): boolean {
+  if (esquema.chaves.length !== chaves.length) return false;
+  for (let i = 0; i < chaves.length; i++) {
+    if (esquema.chaves[i] !== chaves[i]) return false;
   }
-  
-  // Nível 4: tokens comuns — só com tokens reais dos dois lados (id/PESO2 não batem)
-  const tokensBuscados = semEspaco.split(/\s+/).filter(t => t.length > 2);
-  if (tokensBuscados.length > 0) {
-    for (const [k, v] of Object.entries(dado)) {
-      if (v === null || v === undefined) continue;
-      const chaveReal = normalizarChave(k).replace(/\s+/g, '');
-      const tokensReal = chaveReal.split(/\s+/).filter(t => t.length > 2);
-      if (tokensReal.length === 0) continue;
-      const tokensComuns = tokensBuscados.filter(t => tokensReal.includes(t));
-      if (tokensComuns.length === 0) continue;
-      if (tokensComuns.length >= Math.min(tokensBuscados.length, tokensReal.length)) return v;
+  return true;
+}
+
+function esquemaColuna(dado: Record<string, any>): EsquemaColuna {
+  const pronto = esquemaDaLinha.get(dado);
+  if (pronto) return pronto;
+
+  const chaves = Object.keys(dado);
+  let hash = chaves.length;
+  for (let i = 0; i < chaves.length; i++) {
+    const chave = chaves[i];
+    hash = Math.imul(hash, 33) ^ chave.length ^ chave.charCodeAt(0) ^ (chave.charCodeAt(chave.length - 1) << 8);
+  }
+  hash >>>= 0;
+  const lista = esquemasPorHash.get(hash);
+  if (lista) {
+    for (const esquema of lista) {
+      if (!mesmoEsquema(esquema, chaves)) continue;
+      esquemaDaLinha.set(dado, esquema);
+      return esquema;
     }
   }
-  
-  // Nível 5: dados brutos (d.dados)
-  if (dado.dados && typeof dado.dados === 'object' && !Array.isArray(dado.dados)) return encontrarValorColuna(dado.dados, nomeColuna);
-  
-  // ⭐ Nível 6: fallback por sinônimos — tenta colunas alternativas conhecidas
+  const normas = new Array<string>(chaves.length);
+  const espacos = new Array<string>(chaves.length);
+  const hodometro = new Uint8Array(chaves.length);
+  const porEspaco = new Map<string, string[]>();
+  for (let i = 0; i < chaves.length; i++) {
+    const norm = normalizarChave(chaves[i]);
+    const espaco = normalizarChaveEspaco(chaves[i]);
+    normas[i] = norm;
+    espacos[i] = espaco;
+    hodometro[i] = norm.includes('KM') && (norm.includes('SAIDA') || norm.includes('CHEGADA') || norm.includes('ROTA') || norm.includes('BASE')) ? 1 : 0;
+    if (chaves[i] === 'dados') continue;
+    const grupo = porEspaco.get(espaco);
+    if (grupo) grupo.push(chaves[i]);
+    else porEspaco.set(espaco, [chaves[i]]);
+  }
+  const esquema: EsquemaColuna = {
+    hash,
+    chaves,
+    normas,
+    espacos,
+    hodometro,
+    candidatos: new Map(),
+    atalho: new Map(),
+    porEspaco,
+  };
+  if (lista) lista.push(esquema);
+  else esquemasPorHash.set(hash, [esquema]);
+  esquemaDaLinha.set(dado, esquema);
+  return esquema;
+}
+
+function chavesCandidatas(esquema: EsquemaColuna, nomeColuna: string): string[] {
+  const pronta = esquema.candidatos.get(nomeColuna);
+  if (pronta) return pronta;
+
+  const chaveNorm = normalizarChave(nomeColuna);
+  const semEspaco = chaveNorm.replace(/\s+/g, '');
+  const kmDistancia = buscaKmDeDistancia(nomeColuna);
+  const lista: string[] = [];
+  const ja = new Set<string>();
+
+  const adicionar = (chave: string) => {
+    if (ja.has(chave)) return;
+    ja.add(chave);
+    lista.push(chave);
+  };
+
+  for (let i = 0; i < esquema.chaves.length; i++) {
+    if (esquema.normas[i] === chaveNorm) adicionar(esquema.chaves[i]);
+  }
+  if (semEspaco !== chaveNorm) {
+    for (let i = 0; i < esquema.chaves.length; i++) {
+      if (esquema.normas[i].replace(/\s+/g, '') === semEspaco) adicionar(esquema.chaves[i]);
+    }
+  }
+  for (let i = 0; i < esquema.chaves.length; i++) {
+    if (kmDistancia && esquema.hodometro[i]) continue;
+    const chaveReal = esquema.normas[i].replace(/\s+/g, '');
+    if (chaveReal.length >= 4 && chaveReal.includes(semEspaco)) adicionar(esquema.chaves[i]);
+    else if (chaveReal.length >= 5 && chaveReal.length >= semEspaco.length - 1 && semEspaco.includes(chaveReal)) adicionar(esquema.chaves[i]);
+  }
+  const tokensBuscados = semEspaco.split(/\s+/).filter(t => t.length > 2);
+  if (tokensBuscados.length > 0) {
+    for (let i = 0; i < esquema.chaves.length; i++) {
+      const tokensReal = esquema.normas[i].replace(/\s+/g, '').split(/\s+/).filter(t => t.length > 2);
+      if (tokensReal.length === 0) continue;
+      let comuns = 0;
+      for (const token of tokensBuscados) {
+        if (tokensReal.includes(token)) comuns += 1;
+      }
+      if (comuns === 0) continue;
+      if (comuns >= Math.min(tokensBuscados.length, tokensReal.length)) adicionar(esquema.chaves[i]);
+    }
+  }
+
+  esquema.candidatos.set(nomeColuna, lista);
+  return lista;
+}
+
+/** Percorre as chaves já normalizadas (acento e espaço), na ordem da linha. */
+export function algumValorEspaco(
+  dado: Record<string, any>,
+  teste: (normEspaco: string, valor: unknown) => boolean,
+): unknown {
+  if (!dado) return undefined;
+  const esquema = esquemaColuna(dado);
+  for (let i = 0; i < esquema.chaves.length; i++) {
+    const valor = dado[esquema.chaves[i]];
+    if (valor === null || valor === undefined) continue;
+    if (teste(esquema.espacos[i], valor)) return valor;
+  }
+  return undefined;
+}
+
+/** Valores na ordem da linha, para a comparação estrita (hora e hodômetro). */
+export function valoresPorNormaEspaco(dado: Record<string, any>, nome: string): unknown[] {
+  if (!dado || !nome) return [];
+  const chaves = esquemaColuna(dado).porEspaco.get(normalizarChaveEspaco(nome));
+  if (!chaves) return [];
+  const valores: unknown[] = [];
+  for (const chave of chaves) {
+    const valor = dado[chave];
+    if (valor === null || valor === undefined) continue;
+    valores.push(valor);
+  }
+  return valores;
+}
+
+let profundidadeBuscaColuna = 0;
+
+export function encontrarValorColuna(dado: Record<string, any>, nomeColuna: string): any {
+  profundidadeBuscaColuna += 1;
+  const inicio = profundidadeBuscaColuna === 1 ? performance.now() : 0;
+  try {
+    return buscarValorColuna(dado, nomeColuna);
+  } finally {
+    if (profundidadeBuscaColuna === 1) marcarBloco('busca de coluna', performance.now() - inicio);
+    profundidadeBuscaColuna -= 1;
+  }
+}
+
+function buscarValorColuna(dado: Record<string, any>, nomeColuna: string): any {
+  if (!dado || !nomeColuna) return undefined;
+  if (dado[nomeColuna] !== undefined && dado[nomeColuna] !== null) return dado[nomeColuna];
+  return resolverValorColuna(dado, nomeColuna);
+}
+
+function resolverValorColuna(dado: Record<string, any>, nomeColuna: string): any {
+  const esquema = esquemaColuna(dado);
+  for (const chave of chavesCandidatas(esquema, nomeColuna)) {
+    const valor = dado[chave];
+    if (valor !== null && valor !== undefined) return valor;
+  }
+
+  if (dado.dados && typeof dado.dados === 'object' && !Array.isArray(dado.dados)) {
+    return encontrarValorColuna(dado.dados, nomeColuna);
+  }
+
   const nomeUpper = nomeColuna.trim().toUpperCase();
   const sinonimos = COLUNA_SINONIMOS[nomeUpper];
   if (sinonimos && sinonimos.length > 0) {
-    // Tenta cada sinônimo (pulando o primeiro que é o próprio nome)
     for (let i = 1; i < sinonimos.length; i++) {
       const valor = encontrarValorColuna(dado, sinonimos[i]);
       if (valor !== undefined && valor !== null && valor !== '') return valor;
     }
   }
-  
-  // Nível 7: busca em qualquer coluna que tenha valor não-nulo (último recurso para COUNT DISTINCT)
-  // Só retorna a primeira coluna com valor se todas as tentativas falharam
-  for (const [k, v] of Object.entries(dado)) {
+
+  for (let i = 0; i < esquema.chaves.length; i++) {
+    const v = dado[esquema.chaves[i]];
     if (v !== null && v !== undefined && v !== '' && typeof v === 'string' && v.length > 1 && !/^\d+$/.test(v)) {
-      // Para COUNT DISTINCT, qualquer coluna de texto serve como fallback genérico
-      // Mas não queremos pegar colunas como "PESO TOTAL" que são numéricas
-      const chaveReal = normalizarChave(k);
-      if (!chaveReal.includes('PESO') && !chaveReal.includes('KM') && !chaveReal.includes('HORA') && !chaveReal.includes('DATA')) {
+      if (!esquema.normas[i].includes('PESO') && !esquema.normas[i].includes('KM') && !esquema.normas[i].includes('HORA') && !esquema.normas[i].includes('DATA')) {
         return v;
       }
     }
   }
-  
+
   return undefined;
 }
 
@@ -451,22 +627,13 @@ export function calcularExpressao(expressao: string, contexto: ContextoCalculo):
         switch (operador) { case '==': return strVal === strCond; case '!=': return strVal !== strCond; case '>': return strVal > strCond; case '<': return strVal < strCond; case '>=': return strVal >= strCond; case '<=': return strVal <= strCond; default: return true; }
       });
     }
-    const dadosNormalizados = dadosFiltrados.map(d => {
-      const obj: Record<string, any> = { ...d };
-      const nomeNormalizado = normalizarChave(coluna);
-      for (const [k, v] of Object.entries(d)) { if (normalizarChave(k) === nomeNormalizado && !obj[coluna] && k !== coluna) obj[coluna] = v; }
-      return obj;
-    });
     let valor: number;
     if (func.funcao === 'FATURAMENTO_EST') {
       const partes = func.texto.match(/FATURAMENTO_EST\s*\(\s*([^,]+)\s*,\s*([^)]+)\)/i);
       const colPeso = partes ? partes[1].trim() : coluna, colTipo = partes ? partes[2].trim() : coluna;
       valor = calcularFaturamentoEstimado(colPeso, colTipo, dadosFiltrados, valoresFixos);
-    } else if (func.funcao === 'COUNT DISTINCT' || (func.funcao === 'COUNT' && coluna === '*')) {
-      valor = aplicarAgregacao(func.funcao, coluna, dadosNormalizados);
     } else {
-      valor = aplicarAgregacao(func.funcao as Agregacao, coluna, dadosNormalizados);
-      if (valor === 0 && dadosFiltrados.length > 0) valor = aplicarAgregacao(func.funcao as Agregacao, coluna, dadosFiltrados);
+      valor = aplicarAgregacao(func.funcao as Agregacao, coluna, dadosFiltrados);
     }
     const regex = new RegExp(func.texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
     expr = expr.replace(regex, String(Math.round(valor * 100) / 100));

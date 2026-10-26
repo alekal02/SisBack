@@ -10,6 +10,7 @@ import AppDataSource, {
 } from '../database/data-source';
 import { contratosComBanco, escopoCacheTenant } from './tenantFanout';
 import { Contract } from '../entities/Contract';
+import { PlanilhaUpload } from '../entities/PlanilhaUpload';
 import { Servico } from '../entities/Servico';
 import {
   calcularCicloMensalContrato,
@@ -27,7 +28,7 @@ import {
 import { dashboardCache, type ExecutivoCacheParams } from './DashboardCacheManager';
 import PlanilhaService from './PlanilhaService';
 import type { DashboardExecutivoController } from '../controllers/DashboardExecutivoController';
-import { invalidarExecutivoDoServico } from './executivoCacheTabela';
+import { ciclosParaRecalcular, invalidarExecutivoDoServico } from './executivoCacheTabela';
 import { calcularWarmupPedido } from './warmupPolicy';
 import { trabalhoPesadoEmAndamento } from './trabalhoPesado';
 export { calcularWarmupPedido } from './warmupPolicy';
@@ -293,9 +294,9 @@ export function iniciarAgendamentoWarmupExecutivo(): void {
  * serviço cairia no banco de controle, que não tem a tabela.
  */
 export function agendarWarmupPosUpload(servicoId: string, contractId?: string): void {
-  void invalidarExecutivoDoServico(servicoId, contractId);
-  if (!WARMUP_ENABLED) return;
   const tenantDb = getCurrentTenantDb();
+  void recalcularExecutivoPosImport(servicoId, contractId, tenantDb);
+  if (!WARMUP_ENABLED) return;
 
   warmupPosUploadPendente = { servicoId, contractId };
   if (warmupPosUploadTimer) clearTimeout(warmupPosUploadTimer);
@@ -329,4 +330,61 @@ export function agendarWarmupPosUpload(servicoId: string, contractId?: string): 
       }
     })();
   }, 5000);
+}
+
+/**
+ * A importação invalida a tabela e devolve o cálculo ao worker, sem segurar
+ * a resposta do upload. Quem abrir a tela entra na mesma conta já em andamento.
+ */
+async function recalcularExecutivoPosImport(
+  servicoId: string,
+  contractId: string | undefined,
+  tenantDb: string | null,
+): Promise<void> {
+  const rodar = async () => {
+    await invalidarExecutivoDoServico(servicoId, contractId);
+    let cid = contractId;
+    if (!cid) {
+      const servico = await AppDataSource.getRepository(Servico).findOne({ where: { id: servicoId } });
+      cid = servico?.contract_id;
+    }
+    if (!cid) return;
+
+    const contrato = await AppDataSource.getRepository(Contract).findOne({ where: { id: cid } });
+    const dia = normalizarDiaInicioCiclo(contrato?.diaInicioCiclo);
+    const atual = inferirMesReferenciaAtual(dia);
+    const upload = await AppDataSource.getRepository(PlanilhaUpload)
+      .createQueryBuilder('u')
+      .innerJoin(Servico, 's', 's.id = u.servico_id')
+      .where('s.contract_id = :cid', { cid })
+      .orderBy('u.criadoEm', 'DESC')
+      .select(['u.id', 'u.cicloMesReferencia', 'u.cicloAnoReferencia'])
+      .getOne();
+    const importado = upload?.cicloMesReferencia && upload?.cicloAnoReferencia
+      ? { mes: upload.cicloMesReferencia, ano: upload.cicloAnoReferencia }
+      : null;
+
+    const { atenderExecutivo } = await import('./executivoAtendimento');
+    for (const ciclo of ciclosParaRecalcular(atual, importado)) {
+      try {
+        await atenderExecutivo({
+          periodo: 'ciclo',
+          contractId: cid,
+          mesReferencia: String(ciclo.mes),
+          anoReferencia: String(ciclo.ano),
+        });
+        const mes = String(ciclo.mes).padStart(2, '0');
+        console.log(`[Executivo] recálculo em segundo plano ${ciclo.ano}-${mes}`);
+      } catch (err) {
+        console.warn('[Executivo] recálculo em segundo plano falhou:', (err as Error)?.message || err);
+      }
+    }
+  };
+
+  try {
+    if (tenantDb) await runWithTenant(tenantDb, rodar);
+    else await rodar();
+  } catch (err) {
+    console.warn('[Executivo] recálculo em segundo plano falhou:', (err as Error)?.message || err);
+  }
 }

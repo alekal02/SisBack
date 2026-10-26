@@ -29,7 +29,10 @@ import { Servico } from '../entities/Servico';
 import { Contract } from '../entities/Contract';
 import { Caminhao } from '../entities/Caminhao';
 import {
+  algumValorEspaco,
   encontrarValorColuna,
+  invalidarEsquemaColuna,
+  normalizarChaveEspaco,
 } from '../services/FormulaEngine';
 import { aplicarFiltroViagensValidasDashboard } from '../services/validacaoViagemService';
 import { gerarHtmlRelatorioExecutivo, PdfExecutivoParams } from '../services/PdfRelatorioExecutivoService';
@@ -37,6 +40,7 @@ import { invalidarPdfCache, getPdfCache, getPdfCacheDuracao } from '../services/
 import { dashboardCache } from '../services/DashboardCacheManager';
 import { calcularIndicadoresExecutivoUnificado } from '../services/executivoIndicadoresService';
 import { atenderExecutivo, atenderPdfExecutivo } from '../services/executivoAtendimento';
+import { marcarBloco } from '../services/executivoBlocos';
 import {
   contarRotasValidadas,
   contarViagensPorRotaRegistro,
@@ -97,6 +101,27 @@ function detectarColuna(dados: Record<string, any>[], candidatos: string[]): str
  * 3. Colunas de hora específicas nos dados brutos ("HORA SÁIDA BASE", "HORA CHEGADA BASE")
  * 4. Propriedade horaSaida/horaChegada da entidade (se mapeadas corretamente)
  */
+const linhasPreparadas = new WeakSet<object>();
+
+function achatarColeta(d: { dados?: Record<string, any> | null }): Record<string, any> {
+  if (!d.dados || typeof d.dados !== 'object' || Array.isArray(d.dados)) return d as Record<string, any>;
+  if (!linhasPreparadas.has(d)) {
+    let acrescentou = false;
+    for (const [key, value] of Object.entries(d)) {
+      if (key === 'dados' || key in d.dados) continue;
+      d.dados[key] = value;
+      acrescentou = true;
+    }
+    if (acrescentou) invalidarEsquemaColuna(d.dados);
+    linhasPreparadas.add(d);
+  }
+  return d.dados;
+}
+
+function achatarColetas(dados: { dados?: Record<string, any> | null }[]): Record<string, any>[] {
+  return dados.map(achatarColeta);
+}
+
 function extrairHorasProdutivas(obj: Record<string, any>): number {
   let horas = 0;
 
@@ -112,17 +137,13 @@ function extrairHorasProdutivas(obj: Record<string, any>): number {
   const colHoras = ['HORAS FORA UNIDADE', 'HORAS_FORA_UNIDADE', 'horasForaUnidade',
     'TEMPO FORA', 'HORAS', 'HORAS PRODUTIVAS', 'tempoForaUnidade'];
   for (const col of colHoras) {
-    const chaves = Object.keys(obj);
-    const norm = col.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
-    for (const chave of chaves) {
-      const chaveNorm = chave.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
-      if (chaveNorm.includes(norm) || norm.includes(chaveNorm)) {
-        const valor = Number(obj[chave]) || 0;
-        if (valor > 0 && valor <= 24) {
-          return Math.round(valor * 100) / 100;
-        }
-      }
-    }
+    const norm = normalizarChaveEspaco(col);
+    const achado = algumValorEspaco(obj, (normEspaco, valor) => {
+      if (!(normEspaco.includes(norm) || norm.includes(normEspaco))) return false;
+      const n = Number(valor) || 0;
+      return n > 0 && n <= 24;
+    });
+    if (achado !== undefined) return Math.round((Number(achado) || 0) * 100) / 100;
   }
 
   // Nível 3: colunas de hora específicas dos dados brutos
@@ -135,36 +156,30 @@ function extrairHorasProdutivas(obj: Record<string, any>): number {
   let horaSaidaValor = 0;
   let horaChegadaValor = 0;
 
-  // Tentar encontrar hora de saída nos dados brutos
   for (const cand of colHoraSaidaCands) {
-    const normCand = cand.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
-    for (const chave of Object.keys(obj)) {
-      const chaveNorm = chave.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
-      if (chaveNorm.includes(normCand) || normCand.includes(chaveNorm)) {
-        const v = Number(obj[chave]) || 0;
-        if (v > 0) {
-          horaSaidaValor = v;
-          break;
-        }
-      }
+    const normCand = normalizarChaveEspaco(cand);
+    const achado = algumValorEspaco(obj, (normEspaco, valor) => {
+      if (!(normEspaco.includes(normCand) || normCand.includes(normEspaco))) return false;
+      return (Number(valor) || 0) > 0;
+    });
+    const v = Number(achado) || 0;
+    if (v > 0) {
+      horaSaidaValor = v;
+      break;
     }
-    if (horaSaidaValor > 0) break;
   }
 
-  // Tentar encontrar hora de chegada nos dados brutos
   for (const cand of colHoraChegadaCands) {
-    const normCand = cand.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
-    for (const chave of Object.keys(obj)) {
-      const chaveNorm = chave.trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
-      if (chaveNorm.includes(normCand) || normCand.includes(chaveNorm)) {
-        const v = Number(obj[chave]) || 0;
-        if (v > 0) {
-          horaChegadaValor = v;
-          break;
-        }
-      }
+    const normCand = normalizarChaveEspaco(cand);
+    const achado = algumValorEspaco(obj, (normEspaco, valor) => {
+      if (!(normEspaco.includes(normCand) || normCand.includes(normEspaco))) return false;
+      return (Number(valor) || 0) > 0;
+    });
+    const v = Number(achado) || 0;
+    if (v > 0) {
+      horaChegadaValor = v;
+      break;
     }
-    if (horaChegadaValor > 0) break;
   }
 
   // Se encontrou ambas, calcular diferença
@@ -626,6 +641,7 @@ export class DashboardExecutivoController {
       const kpisCalculados = indicadores.kpisCalculados;
 
       // 3. Carregar contratos para listagens
+      const inicioAuxiliares = performance.now();
       const contracts = contractId
         ? [await this.contractRepo.findOne({ where: { id: contractId } })]
         : await this.contractRepo.find();
@@ -653,8 +669,10 @@ export class DashboardExecutivoController {
       // 5. Caminhões cadastrados
       const todosCaminhoes = await this.caminhaoRepo.find();
       const totalCaminhoesCadastrados = todosCaminhoes.length;
+      marcarBloco('consultas auxiliares', performance.now() - inicioAuxiliares);
 
       // 6. Painéis financeiro/operacional a partir das métricas unificadas
+      const inicioMontagem = performance.now();
       const custoAtual = abastecimentosAtuais.reduce((s, a) => s + Number(a.valor), 0);
       const custoAnterior = abastecimentosAnteriores.reduce((s, a) => s + Number(a.valor), 0);
       const mAtual = indicadores.metricasAtual;
@@ -1061,6 +1079,8 @@ export class DashboardExecutivoController {
         },
       };
 
+      marcarBloco('montagem da tela', performance.now() - inicioMontagem);
+
       // ═══ ARMAZENAR EM CACHE E ENVIAR RESPOSTA ═══
       dashboardCache.armazenar(paramsCache, resposta);
       res.json(resposta);
@@ -1178,18 +1198,7 @@ export class DashboardExecutivoController {
     }
 
     // Converter para Record para usar encontrarValorColuna
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
     const colTipo = detectarColuna(dadosNorm, ['TIPO CAMINHAO', 'TIPO_CAMINHAO', 'tipoCaminhao', 'CAMINHAO', 'CAMINHÃO']);
@@ -1279,15 +1288,7 @@ export class DashboardExecutivoController {
 
       // ═══ HORAS PRODUTIVAS — usando helper centralizado extrairHorasProdutivas ═══
       // Construir objeto combinado (entidade + dados brutos)
-      const objCombinado: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        objCombinado[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          objCombinado[key] = value;
-        }
-      }
+      const objCombinado = achatarColeta(d);
       const horaValida = extrairHorasProdutivas(objCombinado);
       if (horaValida > 0 && horaValida <= 24) {
         horasProdutivas += horaValida;
@@ -1320,18 +1321,7 @@ export class DashboardExecutivoController {
     abastecimentos: Abastecimento[]
   ): { dias: string[]; faturamentoDiario: number[]; custoDiario: number[]; kmDiario: number[]; horasDiario: number[] } {
     // Normalizar dados para detectar colunas
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     // ═══ EXTRAIR AS ÚLTIMAS 7 DATAS COM DADOS ═══
     const datasComDados = new Set<string>();
@@ -1451,18 +1441,7 @@ export class DashboardExecutivoController {
     temValorFaturamento: boolean
   ): { data: string; label: string; valor: number }[] {
     // Normalizar para detectar colunas
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     // ═══ EXTRAIR DATAS REAIS DOS DADOS ═══
     const datasComDados = new Set<string>();
@@ -1529,18 +1508,7 @@ export class DashboardExecutivoController {
   ): { tipo: string; valor: number; percentual: number }[] {
     if (dados.length === 0) return [];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
     const colTipo = detectarColuna(dadosNorm, ['TIPO CAMINHAO', 'TIPO_CAMINHAO', 'tipoCaminhao', 'CAMINHAO', 'CAMINHÃO']);
@@ -1581,18 +1549,7 @@ export class DashboardExecutivoController {
     dados: ColetaData[]
   ): { coletor: string; tonelagem: number; viagens: number; km: number; tonPorDia: number }[] {
     // Normalizar dados para detectar colunas
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPlaca = detectarColuna(dadosNorm, ['PLACA', 'CAMINHAO', 'VEICULO', 'COLETOR', 'COLETORA', 'EQUIPAMENTO', 'placa']);
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
@@ -1640,18 +1597,7 @@ export class DashboardExecutivoController {
     dados: ColetaData[]
   ): { motorista: string; placa: string; viagens: number; tonelagem: number; kmTotal: number; horasProdutivas: number; tonPorViagem: number; kmPorViagem: number; tonPorKm: number; tonPorHora: number }[] {
     // Normalizar dados para detectar colunas
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colMotorista = detectarColuna(dadosNorm, ['MOTORISTA', 'OPERADOR', 'NOME', 'NOME MOTORISTA', 'NOME_MOTORISTA', 'motorista', 'MOT']);
     const colPlaca = detectarColuna(dadosNorm, ['PLACA', 'CAMINHAO', 'VEICULO', 'COLETOR', 'COLETORA', 'EQUIPAMENTO', 'placa']);
@@ -1741,15 +1687,7 @@ export class DashboardExecutivoController {
       let totalHoras = 0;
       for (const d of dados) {
         // Construir objeto combinado para usar o helper
-        const objCombinado: Record<string, any> = {};
-        for (const [key, value] of Object.entries(d)) {
-          objCombinado[key] = value;
-        }
-        if (d.dados) {
-          for (const [key, value] of Object.entries(d.dados)) {
-            objCombinado[key] = value;
-          }
-        }
+        const objCombinado = achatarColeta(d);
         totalHoras += extrairHorasProdutivas(objCombinado);
       }
       return totalHoras / totalViagens;
@@ -1792,18 +1730,7 @@ export class DashboardExecutivoController {
   ): { tipo: string; receita: number; custo: number; margem: number }[] {
     if (dados.length === 0) return [];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
     const colTipo = detectarColuna(dadosNorm, ['TIPO CAMINHAO', 'TIPO_CAMINHAO', 'tipoCaminhao', 'CAMINHAO', 'CAMINHÃO']);
@@ -1867,18 +1794,7 @@ export class DashboardExecutivoController {
   ): { coletor: string; faturamento: number }[] {
     if (dados.length === 0) return [];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) {
-        obj[key] = value;
-      }
-      if (d.dados) {
-        for (const [key, value] of Object.entries(d.dados)) {
-          obj[key] = value;
-        }
-      }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
     const colTipo = detectarColuna(dadosNorm, ['TIPO CAMINHAO', 'TIPO_CAMINHAO', 'tipoCaminhao', 'CAMINHAO', 'CAMINHÃO']);
@@ -1923,12 +1839,7 @@ export class DashboardExecutivoController {
   ): { regional: string; faturamento: number; viagens: number }[] {
     if (dados.length === 0) return [];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) { obj[key] = value; }
-      if (d.dados) { for (const [key, value] of Object.entries(d.dados)) { obj[key] = value; } }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colRegional = detectarColuna(dadosNorm, ['REGIONAL', 'REGIAO', 'REGIÃO', 'regional']);
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
@@ -1980,12 +1891,7 @@ export class DashboardExecutivoController {
   ): { motorista: string; placa: string; faturamento: number; viagens: number }[] {
     if (dados.length === 0) return [];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) { obj[key] = value; }
-      if (d.dados) { for (const [key, value] of Object.entries(d.dados)) { obj[key] = value; } }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colMotorista = detectarColuna(dadosNorm, ['MOTORISTA', 'OPERADOR', 'NOME', 'NOME MOTORISTA', 'NOME_MOTORISTA', 'motorista', 'MOT']);
     const colPlaca = detectarColuna(dadosNorm, ['PLACA', 'CAMINHAO', 'VEICULO', 'COLETOR', 'placa']);
@@ -2036,12 +1942,7 @@ export class DashboardExecutivoController {
   ): { turno: string; faturamento: number; tonelagem: number; viagens: number; mediaPorViagem: number }[] {
     if (dados.length === 0) return [];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) { obj[key] = value; }
-      if (d.dados) { for (const [key, value] of Object.entries(d.dados)) { obj[key] = value; } }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colTurno = detectarColuna(dadosNorm, ['TURNO', 'turno']);
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
@@ -2088,12 +1989,7 @@ export class DashboardExecutivoController {
 
     const NOMES_DIAS = ['', 'Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) { obj[key] = value; }
-      if (d.dados) { for (const [key, value] of Object.entries(d.dados)) { obj[key] = value; } }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
     const colTipo = detectarColuna(dadosNorm, ['TIPO CAMINHAO', 'TIPO_CAMINHAO', 'tipoCaminhao', 'CAMINHAO', 'CAMINHÃO']);
@@ -2184,12 +2080,7 @@ export class DashboardExecutivoController {
     const diasRestantes = differenceInDays(fimMes, hoje) + 1;
 
     // Calcular faturamento diário para análise de cenários
-    const dadosNorm = dados.map(d => {
-      const obj: Record<string, any> = {};
-      for (const [key, value] of Object.entries(d)) { obj[key] = value; }
-      if (d.dados) { for (const [key, value] of Object.entries(d.dados)) { obj[key] = value; } }
-      return obj;
-    });
+    const dadosNorm = achatarColetas(dados);
 
     const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
     const colTipo = detectarColuna(dadosNorm, ['TIPO CAMINHAO', 'TIPO_CAMINHAO', 'tipoCaminhao', 'CAMINHAO', 'CAMINHÃO']);
@@ -2409,12 +2300,7 @@ export class DashboardExecutivoController {
       const varTicket = calcVariacao(finAtual.ticketMedio, finAnterior.ticketMedio);
 
       // 7. Calcular dados por período (agrupar por dia)
-      const dadosNorm = dadosAtuais.map(d => {
-        const obj: Record<string, any> = {};
-        for (const [key, value] of Object.entries(d)) { obj[key] = value; }
-        if (d.dados) { for (const [key, value] of Object.entries(d.dados)) { obj[key] = value; } }
-        return obj;
-      });
+      const dadosNorm = achatarColetas(dadosAtuais);
       const colPeso = detectarColuna(dadosNorm, ['PESO TOTAL', 'PESO', 'PESOTOTAL', 'PESO_TOTAL', 'pesoTotal']);
 
       // ═══ DETECTAR COLUNA DE DATA NOS DADOS BRUTOS DA PLANILHA ═══

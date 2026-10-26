@@ -2,7 +2,8 @@ import AppDataSource from '../database/data-source';
 import { Servico } from '../entities/Servico';
 import { Contract } from '../entities/Contract';
 import { ColetaData } from '../entities/ColetaData';
-import { normalizarDados, encontrarValorColuna } from './FormulaEngine';
+import { encontrarValorColuna } from './FormulaEngine';
+import { medir, medirAsync, marcarBloco } from './executivoBlocos';
 import { buildValoresFixosFaturamento } from './configFaturamentoValores';
 import PlanilhaService from './PlanilhaService';
 import { colunasJsonDoExecutivo } from './executivoColunas';
@@ -94,11 +95,14 @@ async function processarServicoPeriodo(
     cfgFat?.colunaQuantidade,
     cfgFat?.colunaTipoCaminhao,
   ]);
-  const dadosFiltrados = await PlanilhaService.getDadosBrutosDoPeriodo(servico.id, inicio, fim, colunasJson);
-  const dadosNorm = normalizarDados(dadosFiltrados);
-  const metricas = calcularMetricaExecutivaDeDados(dadosNorm, valoresFixos, servico.id, cfgFat);
+  const dadosFiltrados = await medirAsync('consulta do ciclo', () =>
+    PlanilhaService.getDadosBrutosDoPeriodo(servico.id, inicio, fim, colunasJson));
+  const dadosNorm = dadosFiltrados;
+  const metricas = medir('métricas do serviço', () =>
+    calcularMetricaExecutivaDeDados(dadosNorm, valoresFixos, servico.id, cfgFat));
   const colunasServico = (servico.padraoPlanilha?.colunas || []).map((c: any) => c.nome);
-  const kpis = calcularKpisAtivos(dadosNorm, valoresFixos, todosKpis, metricas.viagens, colunasServico);
+  const kpis = medir('KPIs do serviço', () =>
+    calcularKpisAtivos(dadosNorm, valoresFixos, todosKpis, metricas.viagens, colunasServico));
 
   const coletores = new Set<string>();
   const colPlaca = metricas.colunasDetectadas.colPlaca;
@@ -138,7 +142,7 @@ async function carregarDadosNormCicloConsolidado(
       servico.configFaturamento?.colunaTipoCaminhao,
     ]);
     const brutos = await PlanilhaService.getDadosBrutosDoPeriodo(servico.id, inicio, fim, colunasJson);
-    partes.push(normalizarDados(brutos));
+    partes.push(brutos);
   }
 
   return partes.flat();
@@ -285,6 +289,7 @@ export async function calcularIndicadoresExecutivoUnificado(opts: {
   }
   const temValor = resultadosAtual.some(r => r.metricas.temValor);
 
+  const inicioAjuste = performance.now();
   let kpisCalculados = ajustarKpisColetorConsolidada(
     ajustarKpisContagemDistintaConsolidada(
       mesclarKpisCalculados(resultadosAtual.map(r => r.kpis)),
@@ -332,6 +337,7 @@ export async function calcularIndicadoresExecutivoUnificado(opts: {
       periodoFaturamento,
     );
   }
+  marcarBloco('ajuste de KPIs', performance.now() - inicioAjuste);
 
   const dadosNormAtual = dadosNormCicloAtual;
   const dadosNormAnterior = resultadosAnterior.flatMap(r => r.dadosNorm);

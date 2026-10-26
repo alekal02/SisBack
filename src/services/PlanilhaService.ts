@@ -888,12 +888,7 @@ export class PlanilhaService {
         c."kmRota4", c."horaRota4",
         c."diaSemana",
         c."validoDashboard",
-        (
-          SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
-          FROM jsonb_each(COALESCE(c.dados, '{}'::jsonb)) e
-          WHERE e.key = ANY($4::text[])
-             OR left(e.key, 1) = '_'
-        ) AS dados
+        COALESCE(c.dados, '{}'::jsonb) AS dados
       FROM coleta_dados c
       INNER JOIN planilha_uploads u
         ON u.id = c."planilhaUploadId"
@@ -902,10 +897,11 @@ export class PlanilhaService {
         AND c."dataSaida" >= $2::date
         AND c."dataSaida" <= $3::date
       `,
-      [servicoId, inicioDia, fimDia, chaves],
+      [servicoId, inicioDia, fimDia],
     ) as Record<string, any>[];
 
     if (rows.length === 0) return [];
+    const permitidas = new Set(chaves);
     const entidades = rows.map((row) => {
       const coleta = new ColetaData();
       coleta.id = Number(row.id);
@@ -943,7 +939,12 @@ export class PlanilhaService {
       coleta.horaRota4 = numeroOuNulo(row.horaRota4);
       coleta.diaSemana = numeroOuNulo(row.diaSemana);
       coleta.validoDashboard = row.validoDashboard === true;
-      coleta.dados = row.dados && typeof row.dados === 'object' ? row.dados : {};
+      const cru = row.dados && typeof row.dados === 'object' ? row.dados as Record<string, unknown> : {};
+      const dados: Record<string, unknown> = {};
+      for (const [chave, valor] of Object.entries(cru)) {
+        if (permitidas.has(chave) || chave.startsWith('_')) dados[chave] = valor;
+      }
+      coleta.dados = dados;
       return coleta;
     });
     return this.converterColetasParaBrutos(entidades, true);

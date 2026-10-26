@@ -1,5 +1,5 @@
 import { ColetaData } from '../entities/ColetaData';
-import { encontrarValorColuna, parseNumeroBr } from './FormulaEngine';
+import { encontrarValorColuna, parseNumeroBr, valoresPorNormaEspaco } from './FormulaEngine';
 
 /**
  * Modelo operacional da planilha de coleta com caminhão:
@@ -72,14 +72,22 @@ function limitarViagens(n: number): number {
 }
 
 function registroUnificado(registro: Partial<ColetaData> | Record<string, unknown>): Record<string, unknown> {
-  const raw: Record<string, unknown> = { ...(registro as Record<string, unknown>) };
   const dados = (registro as Partial<ColetaData>).dados;
-  if (dados && typeof dados === 'object' && !Array.isArray(dados)) {
-    for (const [k, v] of Object.entries(dados)) {
-      if (v !== null && v !== undefined && v !== '') raw[k] = v;
+  if (!dados || typeof dados !== 'object' || Array.isArray(dados)) {
+    return registro as Record<string, unknown>;
+  }
+  const base = registro as Record<string, unknown>;
+  for (const [k, v] of Object.entries(dados)) {
+    if (v === null || v === undefined || v === '') continue;
+    if (base[k] !== v) {
+      const raw: Record<string, unknown> = { ...base };
+      for (const [chave, valor] of Object.entries(dados)) {
+        if (valor !== null && valor !== undefined && valor !== '') raw[chave] = valor;
+      }
+      return raw;
     }
   }
-  return raw;
+  return base;
 }
 
 function valorPreenchido(val: unknown): boolean {
@@ -126,12 +134,10 @@ function lerPesoViagemExato(
   }
 
   // Match normalizado estrito (PESO1 ≡ PESO 1), sem "contains" que pega PESO TOTAL
-  const alvo = slot.coluna.replace(/\s+/g, '').toUpperCase();
-  for (const [k, v] of Object.entries(unificado)) {
-    if (v === null || v === undefined || v === '') continue;
-    const kn = String(k).replace(/\s+/g, '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (kn === alvo || kn === slot.campo.toUpperCase()) {
-      const n = parseNumeroBr(v);
+  const nomes = [slot.coluna, slot.campo];
+  for (const nome of nomes) {
+    for (const valor of valoresPorNormaEspaco(unificado as Record<string, any>, nome)) {
+      const n = parseNumeroBr(valor);
       if (!isNaN(n) && n > 0) return n;
     }
   }

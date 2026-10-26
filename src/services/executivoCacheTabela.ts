@@ -5,6 +5,16 @@ export interface CacheExecutivoLido {
   calculadoEm: Date;
 }
 
+/** Ciclo corrente e, se a planilha for de outro mês, o ciclo importado também. */
+export function ciclosParaRecalcular(
+  atual: { mes: number; ano: number },
+  importado: { mes: number; ano: number } | null,
+): { mes: number; ano: number }[] {
+  if (!importado || !importado.mes || !importado.ano) return [atual];
+  if (importado.mes === atual.mes && importado.ano === atual.ano) return [atual];
+  return [atual, importado];
+}
+
 /** Chave estável do ciclo na tabela. O mês de referência vira AAAA-MM. */
 export function chaveCicloExecutivo(consulta: {
   periodo?: string;

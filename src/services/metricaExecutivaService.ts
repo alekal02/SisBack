@@ -93,37 +93,30 @@ export function calcularMetricaExecutivaDeDados(
   const viagens = contarViagensValidadas(dadosNorm);
 
   const coletoresSet = new Set<string>();
-  for (const d of dadosNorm) {
-    const v = encontrarValorColuna(d, colPlaca);
-    if (v !== undefined && v !== null && v !== '') coletoresSet.add(String(v).trim());
-  }
-  const qtdColetores = coletoresSet.size;
-
   let kmTotal = 0;
   let pesoTotalKg = 0;
+  let faturamento = 0;
+  const fatPorTipo: Record<string, number> = {};
   for (const d of dadosNorm) {
+    const placa = encontrarValorColuna(d, colPlaca);
+    if (placa !== undefined && placa !== null && placa !== '') coletoresSet.add(String(placa).trim());
     kmTotal += Number(encontrarValorColuna(d, colKm)) || 0;
-    pesoTotalKg += Number(encontrarValorColuna(d, colPeso)) || 0;
+    const peso = Number(encontrarValorColuna(d, colPeso)) || 0;
+    pesoTotalKg += peso;
+    if (!temValor || !colPeso || peso <= 0) continue;
+    const tipoRaw = colTipo ? String(encontrarValorColuna(d, colTipo) || '').toUpperCase().trim() : '';
+    if (/^\d+$/.test(tipoRaw)) continue;
+    const toneladas = peso / 1000;
+    const valorUnitario = resolverValorUnitarioPorTipo(tipoRaw, valoresFixos, FALLBACK_VALOR_TONELADA) || FALLBACK_VALOR_TONELADA;
+    const receita = toneladas * valorUnitario;
+    faturamento += receita;
+    if (tipoRaw.length > 0) fatPorTipo[tipoRaw] = (fatPorTipo[tipoRaw] || 0) + receita;
   }
+  const qtdColetores = coletoresSet.size;
   const pesoTotalTon = pesoTotalKg / 1000;
   const horasProdutivas = calcularHorasProdutivasTotal(dadosNorm);
 
-  let faturamento = 0;
-  const fatPorTipo: Record<string, number> = {};
   if (temValor && colPeso) {
-    for (const d of dadosNorm) {
-      const tipoRaw = colTipo ? String(encontrarValorColuna(d, colTipo) || '').toUpperCase().trim() : '';
-      if (/^\d+$/.test(tipoRaw)) continue;
-      const peso = Number(encontrarValorColuna(d, colPeso)) || 0;
-      if (peso <= 0) continue;
-      const toneladas = peso / 1000;
-      const valorUnitario = temValor
-        ? (resolverValorUnitarioPorTipo(tipoRaw, valoresFixos, FALLBACK_VALOR_TONELADA) || FALLBACK_VALOR_TONELADA)
-        : FALLBACK_VALOR_TONELADA;
-      const receita = toneladas * valorUnitario;
-      faturamento += receita;
-      if (tipoRaw.length > 0) fatPorTipo[tipoRaw] = (fatPorTipo[tipoRaw] || 0) + receita;
-    }
     if (faturamento === 0) {
       faturamento = pesoTotalKg / 1000 * (valoresFixos.VALOR_TONELADA || FALLBACK_VALOR_TONELADA);
     }

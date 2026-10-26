@@ -3,6 +3,8 @@ import { parentPort } from 'worker_threads';
 import AppDataSource from '../database/data-source';
 import { DashboardExecutivoController } from '../controllers/DashboardExecutivoController';
 import { gravarExecutivoCache } from './executivoCacheTabela';
+import { limparBlocos, rankingBlocos } from './executivoBlocos';
+import { totalEsquemasColuna } from './FormulaEngine';
 
 interface MensagemExecutivo {
   id: number;
@@ -40,6 +42,7 @@ function ctrl(): DashboardExecutivoController {
 }
 
 async function calcular(msg: MensagemExecutivo): Promise<Record<string, unknown>> {
+  limparBlocos();
   const inicio = Date.now();
   const payload = await new Promise<Record<string, unknown>>((resolve, reject) => {
     let status = 200;
@@ -69,6 +72,8 @@ async function calcular(msg: MensagemExecutivo): Promise<Record<string, unknown>
     }
   }
   console.log(`[ExecutivoWorker] cálculo ${msg.ciclo} em ${Date.now() - inicio} ms`);
+  console.log(`[ExecutivoBlocos] ${JSON.stringify(rankingBlocos())}`);
+  console.log(`[ExecutivoEsquemas] ${totalEsquemasColuna()}`);
   return payload;
 }
 

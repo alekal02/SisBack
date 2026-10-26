@@ -63,7 +63,7 @@ function garantirWorker(): Worker {
   for (const [chave, valor] of Object.entries(process.env)) {
     if (typeof valor === 'string') envWorker[chave] = valor;
   }
-  envWorker.DB_POOL_MAX = '2';
+  envWorker.DB_POOL_MAX = '6';
   worker = new Worker(caminhoWorker(), {
     execArgv: process.execArgv.filter((arg) => arg !== '--test'),
     env: envWorker,

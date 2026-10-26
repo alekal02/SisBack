@@ -1,4 +1,4 @@
-import { encontrarValorColuna, parseNumeroBr } from './FormulaEngine';
+import { algumValorEspaco, encontrarValorColuna, parseNumeroBr, valoresPorNormaEspaco } from './FormulaEngine';
 import { COLUNAS_HORAS_ROTAS, COLUNAS_HODOMETRO } from '../config/modeloColetaCaminhao';
 
 /** Distância operacional plausível por trecho de rota (não hodômetro bruto). */
@@ -52,6 +52,19 @@ function lerHoraCampo(obj: Record<string, any>, ...candidatos: string[]): number
   return 0;
 }
 
+function lerNumeroPelaNormaEspaco(fonte: Record<string, any>, nome: string): number {
+  if (fonte[nome] !== undefined && fonte[nome] !== null && fonte[nome] !== '') {
+    const direto = typeof fonte[nome] === 'number' ? fonte[nome] : parseNumeroBr(fonte[nome]);
+    if (!isNaN(direto) && direto > 0) return direto;
+  }
+  for (const valor of valoresPorNormaEspaco(fonte, nome)) {
+    if (valor === undefined || valor === null || valor === '') continue;
+    const n = typeof valor === 'number' ? valor : parseNumeroBr(valor);
+    if (!isNaN(n) && n > 0) return n;
+  }
+  return 0;
+}
+
 /** Leitura estrita (sem fuzzy contains) — evita confundir HORA SAÍDA ROTA com horaSaida da base. */
 export function lerHoraCampoEstrito(obj: Record<string, any>, ...candidatos: string[]): number {
   if (!obj) return 0;
@@ -64,17 +77,8 @@ export function lerHoraCampoEstrito(obj: Record<string, any>, ...candidatos: str
   for (const fonte of fontes) {
     for (const nome of candidatos) {
       if (!nome) continue;
-      if (fonte[nome] !== undefined && fonte[nome] !== null && fonte[nome] !== '') {
-        const n = typeof fonte[nome] === 'number' ? fonte[nome] : parseNumeroBr(fonte[nome]);
-        if (!isNaN(n) && n > 0) return n;
-      }
-      const alvo = normalizarChave(nome);
-      for (const [k, v] of Object.entries(fonte)) {
-        if (k === 'dados' || v === undefined || v === null || v === '') continue;
-        if (normalizarChave(k) !== alvo) continue;
-        const n = typeof v === 'number' ? v : parseNumeroBr(v);
-        if (!isNaN(n) && n > 0) return n;
-      }
+      const n = lerNumeroPelaNormaEspaco(fonte, nome);
+      if (n > 0) return n;
     }
   }
   return 0;
@@ -190,17 +194,8 @@ export function lerKmCampoEstrito(obj: Record<string, any>, ...candidatos: strin
   for (const fonte of fontes) {
     for (const nome of candidatos) {
       if (!nome) continue;
-      if (fonte[nome] !== undefined && fonte[nome] !== null && fonte[nome] !== '') {
-        const n = typeof fonte[nome] === 'number' ? fonte[nome] : parseNumeroBr(fonte[nome]);
-        if (!isNaN(n) && n > 0) return n;
-      }
-      const alvo = normalizarChave(nome);
-      for (const [k, v] of Object.entries(fonte)) {
-        if (k === 'dados' || v === undefined || v === null || v === '') continue;
-        if (normalizarChave(k) !== alvo) continue;
-        const n = typeof v === 'number' ? v : parseNumeroBr(v);
-        if (!isNaN(n) && n > 0) return n;
-      }
+      const n = lerNumeroPelaNormaEspaco(fonte, nome);
+      if (n > 0) return n;
     }
   }
   return 0;
@@ -325,13 +320,12 @@ export function extrairHorasProdutivasRegistro(obj: Record<string, any>): number
   ];
   for (const col of colHoras) {
     const norm = normalizarChave(col);
-    for (const chave of Object.keys(obj)) {
-      const chaveNorm = normalizarChave(chave);
-      if (chaveNorm.includes(norm) || norm.includes(chaveNorm)) {
-        const valor = Number(obj[chave]) || 0;
-        if (valor > 0 && valor <= 24) return Math.round(valor * 100) / 100;
-      }
-    }
+    const achado = algumValorEspaco(obj, (normEspaco, valor) => {
+      if (!(normEspaco.includes(norm) || norm.includes(normEspaco))) return false;
+      const n = Number(valor) || 0;
+      return n > 0 && n <= 24;
+    });
+    if (achado !== undefined) return Math.round((Number(achado) || 0) * 100) / 100;
   }
 
   const horaSaidaEnt = Number(obj.horaSaida) || 0;

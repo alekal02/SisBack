@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { cacheAindaVale, chaveCicloExecutivo } from './executivoCacheTabela';
+import { cacheAindaVale, chaveCicloExecutivo, ciclosParaRecalcular } from './executivoCacheTabela';
 import { colunasCitadasNaFormula, colunasJsonDoExecutivo } from './executivoColunas';
 
 describe('cache do executivo', () => {
@@ -16,6 +16,13 @@ describe('cache do executivo', () => {
       anoReferencia: 2026,
       servicoId: 'abc',
     }), '2026-10:s:abc');
+  });
+
+  it('recalcula o mês corrente e o mês da planilha quando são diferentes', () => {
+    const atual = { mes: 10, ano: 2026 };
+    assert.deepEqual(ciclosParaRecalcular(atual, { mes: 10, ano: 2026 }), [atual]);
+    assert.deepEqual(ciclosParaRecalcular(atual, null), [atual]);
+    assert.deepEqual(ciclosParaRecalcular(atual, { mes: 9, ano: 2026 }), [atual, { mes: 9, ano: 2026 }]);
   });
 
   it('considera o cache velho quando a importação é mais nova', () => {
