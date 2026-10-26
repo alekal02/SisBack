@@ -11,6 +11,7 @@ import {
   TokenPayload,
   verificarTokenRenovacao,
 } from '../middlewares/authMiddleware';
+import { acessoLivreLigado } from '../utils/acessoLivre';
 
 function payloadUsuario(user: User, tenantDb?: string | null): TokenPayload {
   return {
@@ -170,11 +171,11 @@ class AuthController {
   /**
    * POST /api/auth/acesso-direto
    * Abre a área do gestor sem e-mail nem senha.
-   * Desliga com ACESSO_LIVRE=false.
+   * Desligado por padrão. Só responde se ACESSO_LIVRE=true.
    */
   async acessoDireto(_req: Request, res: Response): Promise<void> {
     try {
-      if (process.env.ACESSO_LIVRE === 'false') {
+      if (!acessoLivreLigado()) {
         res.status(403).json({ error: 'Acesso direto está desligado.' });
         return;
       }
