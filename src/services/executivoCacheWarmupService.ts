@@ -27,6 +27,7 @@ import {
 import { dashboardCache, type ExecutivoCacheParams } from './DashboardCacheManager';
 import PlanilhaService from './PlanilhaService';
 import type { DashboardExecutivoController } from '../controllers/DashboardExecutivoController';
+import { invalidarExecutivoDoServico } from './executivoCacheTabela';
 import { calcularWarmupPedido } from './warmupPolicy';
 import { trabalhoPesadoEmAndamento } from './trabalhoPesado';
 export { calcularWarmupPedido } from './warmupPolicy';
@@ -292,6 +293,7 @@ export function iniciarAgendamentoWarmupExecutivo(): void {
  * serviço cairia no banco de controle, que não tem a tabela.
  */
 export function agendarWarmupPosUpload(servicoId: string, contractId?: string): void {
+  void invalidarExecutivoDoServico(servicoId, contractId);
   if (!WARMUP_ENABLED) return;
   const tenantDb = getCurrentTenantDb();
 

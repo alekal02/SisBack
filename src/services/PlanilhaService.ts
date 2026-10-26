@@ -69,6 +69,19 @@ function toneladasDoPesoKg(pesoTotalKg: number): number {
  *   TEMPO FORA DA UNIDADE, HORAS QUE FICA FORA DA UNIDADE,
  *   CAMINHÃO, KM TOTAL, Nº DE VIAGENS, DIA DA SEMANA...
  */
+function diaCalendario(data: Date): string {
+  const ano = data.getFullYear();
+  const mes = String(data.getMonth() + 1).padStart(2, '0');
+  const dia = String(data.getDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+}
+
+function numeroOuNulo(valor: unknown): number | null {
+  if (valor === null || valor === undefined || valor === '') return null;
+  const n = Number(valor);
+  return Number.isFinite(n) ? n : null;
+}
+
 export class PlanilhaService {
   // Resolvidos a cada uso: com um banco por contrato, o banco ativo muda por requisição.
   private get coletaRepo(): Repository<ColetaData> {
@@ -830,6 +843,110 @@ export class PlanilhaService {
     if (dados.length === 0) return [];
 
     return this.converterColetasParaBrutos(dados, apenasValidos);
+  }
+
+  /**
+   * Linhas de um ciclo só, com o JSON `dados` reduzido às colunas pedidas.
+   * Chaves internas (`_tipoServico`, alerta de hodômetro) continuam vindo.
+   */
+  async getDadosBrutosDoPeriodo(
+    servicoId: string,
+    inicio: Date,
+    fim: Date,
+    colunasJson: string[],
+  ): Promise<Record<string, any>[]> {
+    const inicioDia = diaCalendario(inicio);
+    const fimDia = diaCalendario(fim);
+    const chaves = [...new Set(colunasJson.map(c => c.trim()).filter(Boolean))];
+    const rows = await AppDataSource.query(
+      `
+      SELECT
+        c.id,
+        c."dataSaida",
+        c.turno,
+        c.regional,
+        c.distrito,
+        c.placa,
+        c.motorista,
+        c."numeroColetores",
+        c."kmSaida",
+        c."horaSaida",
+        c."kmChegada",
+        c."horaChegada",
+        c."horaUltimoTerminoCarregamento",
+        c.peso1, c.peso2, c.peso3, c.peso4, c.peso5,
+        c."pesoTotal",
+        c."tempoForaUnidade",
+        c."horasForaUnidade",
+        c."tipoCaminhao",
+        c."kmTotal",
+        c."numeroViagens",
+        c."viagensPorRota",
+        c."kmRota1", c."horaRota1",
+        c."kmRota2", c."horaRota2",
+        c."kmRota3", c."horaRota3",
+        c."kmRota4", c."horaRota4",
+        c."diaSemana",
+        c."validoDashboard",
+        (
+          SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
+          FROM jsonb_each(COALESCE(c.dados, '{}'::jsonb)) e
+          WHERE e.key = ANY($4::text[])
+             OR left(e.key, 1) = '_'
+        ) AS dados
+      FROM coleta_dados c
+      INNER JOIN planilha_uploads u
+        ON u.id = c."planilhaUploadId"
+       AND u.servico_id = $1
+      WHERE c."validoDashboard" = true
+        AND c."dataSaida" >= $2::date
+        AND c."dataSaida" <= $3::date
+      `,
+      [servicoId, inicioDia, fimDia, chaves],
+    ) as Record<string, any>[];
+
+    if (rows.length === 0) return [];
+    const entidades = rows.map((row) => {
+      const coleta = new ColetaData();
+      coleta.id = Number(row.id);
+      coleta.dataSaida = row.dataSaida ? new Date(row.dataSaida) : null as unknown as Date;
+      coleta.turno = row.turno ?? null;
+      coleta.regional = row.regional ?? null;
+      coleta.distrito = row.distrito ?? null;
+      coleta.placa = row.placa ?? null;
+      coleta.motorista = row.motorista ?? null;
+      coleta.numeroColetores = numeroOuNulo(row.numeroColetores);
+      coleta.kmSaida = numeroOuNulo(row.kmSaida);
+      coleta.horaSaida = numeroOuNulo(row.horaSaida);
+      coleta.kmChegada = numeroOuNulo(row.kmChegada);
+      coleta.horaChegada = numeroOuNulo(row.horaChegada);
+      coleta.horaUltimoTerminoCarregamento = numeroOuNulo(row.horaUltimoTerminoCarregamento);
+      coleta.peso1 = numeroOuNulo(row.peso1);
+      coleta.peso2 = numeroOuNulo(row.peso2);
+      coleta.peso3 = numeroOuNulo(row.peso3);
+      coleta.peso4 = numeroOuNulo(row.peso4);
+      coleta.peso5 = numeroOuNulo(row.peso5);
+      coleta.pesoTotal = numeroOuNulo(row.pesoTotal);
+      coleta.tempoForaUnidade = numeroOuNulo(row.tempoForaUnidade);
+      coleta.horasForaUnidade = numeroOuNulo(row.horasForaUnidade);
+      coleta.tipoCaminhao = row.tipoCaminhao ?? null;
+      coleta.kmTotal = numeroOuNulo(row.kmTotal);
+      coleta.numeroViagens = numeroOuNulo(row.numeroViagens);
+      coleta.viagensPorRota = numeroOuNulo(row.viagensPorRota);
+      coleta.kmRota1 = numeroOuNulo(row.kmRota1);
+      coleta.horaRota1 = numeroOuNulo(row.horaRota1);
+      coleta.kmRota2 = numeroOuNulo(row.kmRota2);
+      coleta.horaRota2 = numeroOuNulo(row.horaRota2);
+      coleta.kmRota3 = numeroOuNulo(row.kmRota3);
+      coleta.horaRota3 = numeroOuNulo(row.horaRota3);
+      coleta.kmRota4 = numeroOuNulo(row.kmRota4);
+      coleta.horaRota4 = numeroOuNulo(row.horaRota4);
+      coleta.diaSemana = numeroOuNulo(row.diaSemana);
+      coleta.validoDashboard = row.validoDashboard === true;
+      coleta.dados = row.dados && typeof row.dados === 'object' ? row.dados : {};
+      return coleta;
+    });
+    return this.converterColetasParaBrutos(entidades, true);
   }
 
   /**

@@ -4,9 +4,8 @@ import { Contract } from '../entities/Contract';
 import { ColetaData } from '../entities/ColetaData';
 import { normalizarDados, encontrarValorColuna } from './FormulaEngine';
 import { buildValoresFixosFaturamento } from './configFaturamentoValores';
-import { obterDadosServicoComCache } from './servicoDadosCache';
-import { LIMITE_DADOS_MAX } from '../config/limitesRecursos';
-import { aplicarFiltrosPeriodoServico } from './servicoDadosFiltroService';
+import PlanilhaService from './PlanilhaService';
+import { colunasJsonDoExecutivo } from './executivoColunas';
 import {
   calcularCicloMensalContrato,
   inferirMesReferenciaAtual,
@@ -90,11 +89,14 @@ async function processarServicoPeriodo(
 }> {
   const cfgFat = servico.configFaturamento;
   const valoresFixos = buildValoresFixosFaturamento(contract, cfgFat?.ativo ? cfgFat : null);
-  const dadosBrutos = await obterDadosServicoComCache(servico.id, LIMITE_DADOS_MAX);
-  const dadosFiltrados = aplicarFiltrosPeriodoServico(dadosBrutos || [], inicio, fim);
+  const todosKpis = prepararKpisServico(servico, contract);
+  const colunasJson = colunasJsonDoExecutivo(todosKpis, [
+    cfgFat?.colunaQuantidade,
+    cfgFat?.colunaTipoCaminhao,
+  ]);
+  const dadosFiltrados = await PlanilhaService.getDadosBrutosDoPeriodo(servico.id, inicio, fim, colunasJson);
   const dadosNorm = normalizarDados(dadosFiltrados);
   const metricas = calcularMetricaExecutivaDeDados(dadosNorm, valoresFixos, servico.id, cfgFat);
-  const todosKpis = prepararKpisServico(servico, contract);
   const colunasServico = (servico.padraoPlanilha?.colunas || []).map((c: any) => c.nome);
   const kpis = calcularKpisAtivos(dadosNorm, valoresFixos, todosKpis, metricas.viagens, colunasServico);
 
@@ -130,9 +132,13 @@ async function carregarDadosNormCicloConsolidado(
     const ciclo = calcularCicloMensalContrato(ano, mes, dia);
     const inicio = new Date(`${ciclo.dataInicio}T00:00:00`);
     const fim = new Date(`${ciclo.dataFim}T23:59:59.999`);
-    const brutos = await obterDadosServicoComCache(servico.id, LIMITE_DADOS_MAX);
-    const filtrados = aplicarFiltrosPeriodoServico(brutos || [], inicio, fim);
-    partes.push(normalizarDados(filtrados));
+    const kpis = prepararKpisServico(servico, contract);
+    const colunasJson = colunasJsonDoExecutivo(kpis, [
+      servico.configFaturamento?.colunaQuantidade,
+      servico.configFaturamento?.colunaTipoCaminhao,
+    ]);
+    const brutos = await PlanilhaService.getDadosBrutosDoPeriodo(servico.id, inicio, fim, colunasJson);
+    partes.push(normalizarDados(brutos));
   }
 
   return partes.flat();

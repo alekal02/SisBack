@@ -36,6 +36,7 @@ import { gerarHtmlRelatorioExecutivo, PdfExecutivoParams } from '../services/Pdf
 import { invalidarPdfCache, getPdfCache, getPdfCacheDuracao } from '../services/PdfCacheManager';
 import { dashboardCache } from '../services/DashboardCacheManager';
 import { calcularIndicadoresExecutivoUnificado } from '../services/executivoIndicadoresService';
+import { atenderExecutivo, atenderPdfExecutivo } from '../services/executivoAtendimento';
 import {
   contarRotasValidadas,
   contarViagensPorRotaRegistro,
@@ -519,6 +520,28 @@ export class DashboardExecutivoController {
    * Endpoint único: calcula todos os indicadores de uma só vez.
    */
   async executivo(req: Request, res: Response): Promise<void> {
+    if (!(req as Request & { __executivoInterno?: boolean }).__executivoInterno) {
+      try {
+        if (ehHubDeContratos(req.usuario) && !req.query.contractId) {
+          res.status(409).json({
+            error: 'Cada contrato está no seu próprio banco: escolha um contrato para abrir o executivo.',
+            precisaEscolherContrato: true,
+          });
+          return;
+        }
+        const payload = await atenderExecutivo(req.query as Record<string, unknown>);
+        res.json(payload);
+      } catch (error: any) {
+        console.error('[DashboardExecutivo] Erro:', error?.message || error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'Erro ao carregar dashboard executivo',
+            detalhe: error?.message || '',
+          });
+        }
+      }
+      return;
+    }
     try {
       const {
         periodo = 'ciclo',
@@ -2233,6 +2256,31 @@ export class DashboardExecutivoController {
      POST /api/dashboard/executivo/pdf
      ═══════════════════════════════════════════ */
   async gerarPdf(req: Request, res: Response): Promise<void> {
+    if (!(req as Request & { __executivoInterno?: boolean }).__executivoInterno) {
+      try {
+        const corpo = (req.body || {}) as Record<string, unknown>;
+        if (ehHubDeContratos(req.usuario) && !corpo.contractId) {
+          res.status(409).json({
+            error: 'Cada contrato está no seu próprio banco: escolha um contrato para gerar o PDF executivo.',
+            precisaEscolherContrato: true,
+          });
+          return;
+        }
+        const { buffer, filename } = await atenderPdfExecutivo(corpo);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(buffer);
+      } catch (error: any) {
+        console.error('[DashboardExecutivo] Erro ao gerar PDF:', error?.message || error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'Erro ao gerar PDF executivo',
+            detalhe: error?.message || '',
+          });
+        }
+      }
+      return;
+    }
     try {
       const {
         periodo = 'ciclo',
@@ -2266,7 +2314,9 @@ export class DashboardExecutivoController {
       ).digest('hex');
 
       // Verificar cache
-      const cached = pdfCache.get(cacheKey);
+      const cached = (req as Request & { __executivoInterno?: boolean }).__executivoInterno
+        ? null
+        : pdfCache.get(cacheKey);
       if (cached && (Date.now() - cached.timestamp) < PDF_CACHE_DURACAO) {
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${cached.filename}.pdf"`);
