@@ -122,27 +122,24 @@ export async function apagarDatasDeUploadsAbertos(
   const uploadIds = await obterUploadIdsModificaveis(servicoId, manager);
   if (uploadIds.length === 0) return [];
 
-  const coletaRepo = (manager ?? AppDataSource.manager).getRepository(ColetaData);
-  const resultado: { data: string; registrosRemovidos: number }[] = [];
+  const executor = manager ?? AppDataSource;
+  const rows = await executor.query(
+    `WITH apagados AS (
+       DELETE FROM coleta_dados
+       WHERE "planilhaUploadId" = ANY($1::int[])
+         AND "dataSaida" = ANY($2::date[])
+       RETURNING "dataSaida"
+     )
+     SELECT to_char("dataSaida", 'YYYY-MM-DD') AS data, COUNT(*)::int AS registros
+     FROM apagados
+     GROUP BY 1`,
+    [uploadIds, datas],
+  ) as Array<{ data: string; registros: number | string }>;
 
-  for (const dataStr of datas) {
-    const count = await coletaRepo.createQueryBuilder('c')
-      .where('c.planilhaUploadId IN (:...uploadIds)', { uploadIds })
-      .andWhere('c.dataSaida = :data', { data: dataStr })
-      .getCount();
-    if (count <= 0) continue;
-
-    await coletaRepo.createQueryBuilder()
-      .delete()
-      .from('coleta_dados')
-      .where('planilhaUploadId IN (:...uploadIds)', { uploadIds })
-      .andWhere('"dataSaida" = :data', { data: dataStr })
-      .execute();
-
-    resultado.push({ data: dataStr, registrosRemovidos: count });
-  }
-
-  return resultado;
+  return (rows || []).map((row) => ({
+    data: String(row.data).slice(0, 10),
+    registrosRemovidos: Number(row.registros) || 0,
+  }));
 }
 
 export function montarAvisoDatasCicloFechado(

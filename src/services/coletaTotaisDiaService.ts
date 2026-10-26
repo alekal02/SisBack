@@ -115,6 +115,45 @@ export async function recalcularTotaisDiaServico(servicoId: string): Promise<num
   return dias.length;
 }
 
+/** Recalcula só as datas que a importação apagou ou regravou. */
+export async function recalcularTotaisDiasServico(servicoId: string, datasIso: string[]): Promise<number> {
+  const datas = [...new Set(datasIso.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))];
+  if (!datas.length) return 0;
+  const servico = await AppDataSource.getRepository(Servico).findOne({
+    where: { id: servicoId },
+    select: ['id', 'contract_id'],
+  });
+  if (!servico?.contract_id) return 0;
+
+  const repo = AppDataSource.getRepository(ColetaTotaisDia);
+  for (const dataIso of datas) {
+    const metricas = await getMetricasColetaSql(servicoId, {
+      data: dataIso,
+      ignorarTotais: true,
+    });
+    if (metricas.registros <= 0) {
+      await repo.delete({ servicoId, data: isoParaDateUtc(dataIso) });
+      continue;
+    }
+    await gravarTotais(servicoId, servico.contract_id, dataIso, metricas);
+  }
+  return datas.length;
+}
+
+export async function recalcularTotaisDiasServicoSilencioso(
+  servicoId: string,
+  datasIso: string[],
+): Promise<void> {
+  try {
+    const n = await recalcularTotaisDiasServico(servicoId, datasIso);
+    if (n > 0) {
+      console.log(`[ColetaTotaisDia] ${n} dia(s) alterado(s) servico=${servicoId} banco=${escopoCacheContrato()}`);
+    }
+  } catch (err: any) {
+    console.warn('[ColetaTotaisDia] Recalc dos dias alterados falhou:', err?.message || err);
+  }
+}
+
 export async function recalcularTotaisDiaServicoSilencioso(servicoId: string): Promise<void> {
   try {
     const n = await recalcularTotaisDiaServico(servicoId);

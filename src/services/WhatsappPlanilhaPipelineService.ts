@@ -20,6 +20,7 @@ import { classificarPlanilhaContrato } from './planilhaContratoClassifier';
 import { obterServicoPorTipoContrato } from './servicosPadraoContratoService';
 import PlanilhaService from './PlanilhaService';
 import { invalidarCacheSaudeContratos } from '../controllers/ContractController';
+import { fraseDiasHash, importacaoRegravouDados } from './importacaoDiaHash';
 import { marcarOrigemPlanilhaUpload } from './planilhaOriginalStorage';
 import { liberarNavegadorPdf } from './PdfGeneratorService';
 import wuzapiService from './WuzapiService';
@@ -346,6 +347,8 @@ type ResultadoImportWhatsapp = {
   tipoDetectado: string;
   tipoDetectadoLabel: string;
   mensagem: string;
+  diasAtualizados?: number;
+  diasIguais?: number;
   conferencia?: RelatorioAgenteUpload;
   /** Serviços que receberam dados (ex.: Capina + Roçada no CONSOLIDADO) */
   alvos: AlvoImportWhatsapp[];
@@ -378,7 +381,7 @@ async function importarPlanilha(
       undefined,
       substituir,
     );
-    invalidarCacheSaudeContratos(contractId);
+    if (importacaoRegravouDados(r)) invalidarCacheSaudeContratos(contractId);
     const alvos = (r.splitPorServico || [])
       .filter((s) => s.importados > 0)
       .map((s) => ({
@@ -389,13 +392,19 @@ async function importarPlanilha(
       }));
     const partes = alvos.map((s) => `${s.servicoNome}: ${s.importados} reg.`);
     const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema'));
+    const fraseDias = r.diasAtualizados != null && r.diasIguais != null
+      ? fraseDiasHash(r.diasAtualizados, r.diasIguais)
+      : '';
+    const mioloProducao = [partes.join(' · '), fraseDias, avisoDup || ''].filter(Boolean).join('. ');
     return {
       planilhaUploadId: r.planilhaUploadId,
       importadas: r.importados,
       totalLinhas: r.totalLinhas,
       tipoDetectado: classificacao.tipo,
       tipoDetectadoLabel: classificacao.label,
-      mensagem: `Produção: ${r.importados} registro(s). ${partes.join(' · ')}${avisoDup ? ` ${avisoDup}` : ''}`,
+      diasAtualizados: r.diasAtualizados,
+      diasIguais: r.diasIguais,
+      mensagem: `Produção: ${r.importados} registro(s).${mioloProducao ? ` ${mioloProducao}.` : ''}`,
       alvos: alvos.length
         ? alvos
         : [{
@@ -458,15 +467,30 @@ async function importarPlanilha(
         'whatsapp',
       );
     const qtd = Number((r as { importados?: number }).importados ?? 0);
-    await atualizarPadraoServicoAposImport(alvo.id, buffer, nomeArquivo, r.planilhaUploadId, r.totalLinhas);
-    invalidarCacheSaudeContratos(contractId);
+    const diasColeta = r as { diasAtualizados?: number; diasIguais?: number };
+    const fraseColeta = diasColeta.diasAtualizados != null && diasColeta.diasIguais != null
+      ? fraseDiasHash(diasColeta.diasAtualizados, diasColeta.diasIguais)
+      : '';
+    if ((r as { planilhaUploadId?: number }).planilhaUploadId) {
+      await atualizarPadraoServicoAposImport(alvo.id, buffer, nomeArquivo, r.planilhaUploadId, r.totalLinhas);
+    }
+    if (importacaoRegravouDados({
+      diasAtualizados: diasColeta.diasAtualizados,
+      datasApagadas: (r as { datasApagadas?: unknown[] }).datasApagadas,
+      diasRemovidosAusentes: (r as { diasRemovidosAusentes?: unknown[] }).diasRemovidosAusentes,
+      importados: qtd,
+    })) {
+      invalidarCacheSaudeContratos(contractId);
+    }
     return {
       planilhaUploadId: r.planilhaUploadId,
       importadas: qtd,
       totalLinhas: r.totalLinhas,
       tipoDetectado: classificacao.tipo,
       tipoDetectadoLabel: classificacao.label,
-      mensagem: `Coleta importada em “${alvo.nome}”: ${qtd} registro(s).`,
+      diasAtualizados: diasColeta.diasAtualizados,
+      diasIguais: diasColeta.diasIguais,
+      mensagem: `Coleta importada em “${alvo.nome}”: ${qtd} registro(s).${fraseColeta ? ` ${fraseColeta}.` : ''}`,
       conferencia,
       alvos: [{
         servicoId: alvo.id,
@@ -890,8 +914,15 @@ export class WhatsappPlanilhaPipelineService {
       .filter((d) => d.dia)
       .map((d) => `${d.nome}: ${String(d.dia).split('-').reverse().join('/')}`)
       .join(' · ');
+    const fraseDias = importResult.diasAtualizados != null && importResult.diasIguais != null
+      ? fraseDiasHash(importResult.diasAtualizados, importResult.diasIguais)
+      : null;
+    const cabeca = fraseDias && importResult.importadas === 0 && (importResult.diasIguais ?? 0) > 0
+      ? `✅ Planilha já estava igual. ${fraseDias}.`
+      : `✅ ${importResult.importadas} registro(s) importado(s)`;
     const resumo = [
-      `✅ ${importResult.importadas} registro(s) importado(s)`,
+      cabeca,
+      fraseDias && importResult.importadas > 0 ? fraseDias : null,
       servicosTxt ? servicosTxt : null,
       `Contrato: ${contratoNome}`,
       diasTxt ? `Último dia: ${diasTxt}` : null,

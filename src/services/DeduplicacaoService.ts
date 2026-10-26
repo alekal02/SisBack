@@ -31,13 +31,21 @@ import {
 import { limitarDiasAusentesAoPeriodoDaPlanilha, normalizarDiaInicioCiclo } from '../utils/periodoCicloContrato';
 import { invalidarCacheDadosServico } from './servicoDadosCache';
 import { invalidarCacheDashboardServico } from '../controllers/ServicoController';
-import { recalcularTotaisDiaServicoSilencioso } from './coletaTotaisDiaService';
+import { recalcularTotaisDiasServicoSilencioso } from './coletaTotaisDiaService';
 import { invalidarCacheSaudeContratos } from '../controllers/ContractController';
 import { dashboardCache } from './DashboardCacheManager';
 import { agendarWarmupPosUpload } from './executivoCacheWarmupService';
 import { normalizarTextoTipoCaminhao } from '../config/pesoMaximoCaminhao';
 import { numeroPlanilha } from './FormulaEngine';
 import { aplicarLimitesTextoColeta, textoMaisLongo, lerCampoDados } from '../utils/textoColunaColeta';
+import {
+  carregarHashesDia,
+  decidirDatasRegravacao,
+  hashConteudoDia,
+  importacaoRegravouDados,
+  removerHashesDia,
+  salvarHashesDia,
+} from './importacaoDiaHash';
 
 /**
  * Interface que representa uma linha da planilha já parseada
@@ -969,7 +977,7 @@ export class DeduplicacaoService {
       dashboardCache.invalidar(servicoId);
       agendarWarmupPosUpload(servicoId);
       invalidarCacheSaudeContratos();
-      void recalcularTotaisDiaServicoSilencioso(servicoId);
+      void recalcularTotaisDiasServicoSilencioso(servicoId, this.extrairDatasIsoDasLinhas(linhas));
     }
 
     return {
@@ -1184,6 +1192,72 @@ export class DeduplicacaoService {
     };
   }
 
+  private conteudoNormalizadoColeta(linha: LinhaParseada): Record<string, unknown> {
+    return {
+      data: linha.dataSaida ? linha.dataSaida.toISOString().slice(0, 10) : null,
+      placa: linha.placa,
+      turno: linha.turno,
+      regional: linha.regional,
+      distrito: linha.distrito,
+      motorista: linha.motorista,
+      numeroColetores: linha.numeroColetores,
+      kmSaida: linha.kmSaida,
+      horaSaida: linha.horaSaida,
+      kmChegada: linha.kmChegada,
+      horaChegada: linha.horaChegada,
+      horaUltimoTerminoCarregamento: linha.horaUltimoTerminoCarregamento,
+      peso1: linha.peso1,
+      peso2: linha.peso2,
+      peso3: linha.peso3,
+      peso4: linha.peso4,
+      peso5: linha.peso5,
+      pesoTotal: linha.pesoTotal,
+      tempoForaUnidade: linha.tempoForaUnidade,
+      horasForaUnidade: linha.horasForaUnidade,
+      tipoCaminhao: linha.tipoCaminhao,
+      kmTotal: linha.kmTotal,
+      kmRota1: linha.kmRota1,
+      kmRota2: linha.kmRota2,
+      kmRota3: linha.kmRota3,
+      kmRota4: linha.kmRota4,
+      numeroViagens: linha.numeroViagens,
+      diaSemana: linha.diaSemana,
+      dados: this.filtrarChavesVazias(linha.raw),
+    };
+  }
+
+  private hashesDasDatasColeta(
+    mapa: Map<string, LinhaParseada[]>,
+    datas: string[],
+  ): Map<string, string> {
+    const hashes = new Map<string, string>();
+    for (const data of datas) {
+      const grupo = mapa.get(data) ?? [];
+      hashes.set(data, hashConteudoDia(grupo.map((linha) => this.conteudoNormalizadoColeta(linha))));
+    }
+    return hashes;
+  }
+
+  private async diasAusentesNoPeriodo(
+    servicoId: string,
+    datasPlanilha: string[],
+    cicloAlvo: { dataInicio: string; dataFim: string } | null,
+  ): Promise<string[]> {
+    const uploadIds = await obterUploadIdsModificaveis(servicoId);
+    if (uploadIds.length === 0 || datasPlanilha.length === 0) return [];
+    const diasSistemaRows = await this.coletaRepo.createQueryBuilder('c')
+      .select("DISTINCT to_char(c.dataSaida, 'YYYY-MM-DD')", 'data')
+      .where('c.planilhaUploadId IN (:...uploadIds)', { uploadIds })
+      .andWhere('c.dataSaida IS NOT NULL')
+      .orderBy('data', 'ASC')
+      .getRawMany<{ data: string }>();
+    const diasSistema = diasSistemaRows
+      .map((r) => r.data)
+      .filter((d): d is string => Boolean(d))
+      .filter((d) => !cicloAlvo || (d >= cicloAlvo.dataInicio && d <= cicloAlvo.dataFim));
+    return limitarDiasAusentesAoPeriodoDaPlanilha(diasSistema, datasPlanilha);
+  }
+
   /**
    * Importa uma planilha usando estratégia baseada em DATA.
    * 
@@ -1220,6 +1294,8 @@ export class DeduplicacaoService {
     diasRemovidosAusentes: { data: string; registrosRemovidos: number }[];
     datasIgnoradasCicloFechado?: string[];
     avisos?: string[];
+    diasAtualizados: number;
+    diasIguais: number;
     modo: 'atualizar_data' | 'inserir_data';
     viagensInconsistentes?: number;
     viagensValidasDashboard?: number;
@@ -1259,6 +1335,47 @@ export class DeduplicacaoService {
         await this.validarImportacaoNaoInvadeCicloFechado(servicoId, linhas);
       }
       datasUnicas = prep.datas;
+    }
+
+    let diasAtualizados = 0;
+    let diasIguais = 0;
+    let datasRegravar: string[] | null = null;
+    let hashesPorData = new Map<string, string>();
+    let buracos: string[] = [];
+
+    if (estrategia === 'atualizar_data' && servicoId && datasUnicas.length > 0) {
+      hashesPorData = this.hashesDasDatasColeta(mapaDatas, datasUnicas);
+      const salvos = await carregarHashesDia(servicoId, datasUnicas);
+      const decisao = decidirDatasRegravacao({
+        hashesPlanilha: hashesPorData,
+        hashesSalvos: salvos,
+        datasBloqueadas: datasIgnoradasCicloFechado,
+      });
+      datasRegravar = decisao.regravar;
+      diasAtualizados = decisao.regravar.length;
+      diasIguais = decisao.iguais.length;
+      buracos = await this.diasAusentesNoPeriodo(servicoId, datasUnicas, cicloAlvo);
+      if (datasRegravar.length === 0 && buracos.length === 0) {
+        return {
+          planilhaUploadId: 0,
+          totalLinhas: linhas.length,
+          importados: 0,
+          ignorados: linhas.length,
+          datasExistentes: 0,
+          datasNovas: 0,
+          datasApagadas: [],
+          diasRemovidosAusentes: [],
+          datasIgnoradasCicloFechado,
+          avisos,
+          diasAtualizados: 0,
+          diasIguais,
+          modo: estrategia,
+          viagensInconsistentes: 0,
+          viagensValidasDashboard: 0,
+          viagensCorrigidas: 0,
+          duplicatasRemovidasSql: 0,
+        };
+      }
     }
 
     // Criar registro de upload
@@ -1303,55 +1420,37 @@ export class DeduplicacaoService {
 
     if (estrategia === 'atualizar_data') {
       if (servicoId && datasUnicas.length > 0) {
-        datasApagadas.push(...await apagarDatasDeUploadsAbertos(servicoId, datasUnicas));
-
-        if (uploadIds.length > 0) {
-          const diasSistemaRows = await this.coletaRepo.createQueryBuilder('c')
-            .select("DISTINCT to_char(c.dataSaida, 'YYYY-MM-DD')", 'data')
-            .where('c.planilhaUploadId IN (:...uploadIds)', { uploadIds })
-            .andWhere('c.dataSaida IS NOT NULL')
-            .orderBy('data', 'ASC')
-            .getRawMany<{ data: string }>();
-
-          const diasSistema = diasSistemaRows
-            .map((r) => r.data)
-            .filter((d): d is string => Boolean(d))
-            .filter((d) => (
-              !cicloAlvo || (d >= cicloAlvo.dataInicio && d <= cicloAlvo.dataFim)
-            ));
-
-          const buracos = limitarDiasAusentesAoPeriodoDaPlanilha(
-            diasSistema,
-            datasUnicas,
-          );
-          diasRemovidosAusentes.push(...await apagarDatasDeUploadsAbertos(servicoId, buracos));
+        if (!datasRegravar) {
+          diasAtualizados = datasUnicas.length;
+          diasIguais = 0;
+          buracos = await this.diasAusentesNoPeriodo(servicoId, datasUnicas, cicloAlvo);
         }
+      } else if (!servicoId) {
+        diasAtualizados = datasUnicas.length;
       }
-      datasParaImportar.push(...datasUnicas);
+      datasParaImportar.push(...(datasRegravar ?? datasUnicas));
     } else {
       // 'inserir_data': só importa datas que NÃO existem
       if (uploadIds.length > 0) {
+        const existentesRows = await this.coletaRepo.createQueryBuilder('c')
+          .select("DISTINCT to_char(c.dataSaida, 'YYYY-MM-DD')", 'data')
+          .where('c.planilhaUploadId IN (:...uploadIds)', { uploadIds })
+          .andWhere('c.dataSaida IN (:...datas)', { datas: datasUnicas })
+          .getRawMany<{ data: string }>();
+        const existentes = new Set(existentesRows.map((r) => r.data));
         for (const dataStr of datasUnicas) {
-          const count = await this.coletaRepo.createQueryBuilder('c')
-            .where('c.planilhaUploadId IN (:...uploadIds)', { uploadIds })
-            .andWhere('c.dataSaida = :data', { data: dataStr })
-            .getCount();
-
-          if (count === 0) {
-            datasParaImportar.push(dataStr);
-          }
+          if (!existentes.has(dataStr)) datasParaImportar.push(dataStr);
         }
       } else {
         datasParaImportar.push(...datasUnicas);
       }
+      diasAtualizados = datasParaImportar.length;
+      diasIguais = Math.max(0, datasUnicas.length - datasParaImportar.length);
     }
 
     const datasSet = new Set(datasParaImportar);
 
-    // ─── Inserir registros ───
-    const batch: ColetaData[] = [];
-    const BATCH_SIZE = 500;
-
+    const pendentes: ColetaData[] = [];
     for (const linha of linhas) {
       if (!linha.dataSaida) {
         ignorados++;
@@ -1374,20 +1473,45 @@ export class DeduplicacaoService {
           ignorados++;
           continue;
         }
-        batch.push(coleta);
+        pendentes.push(coleta);
         importados++;
-
-        if (batch.length >= BATCH_SIZE) {
-          await this.coletaRepo.save(batch);
-          batch.length = 0;
-        }
       } catch (err) {
         // Linha com erro é ignorada
       }
     }
 
-    if (batch.length > 0) {
-      await this.coletaRepo.save(batch);
+    const alvoDelete = estrategia === 'atualizar_data'
+      ? (datasRegravar ?? datasUnicas)
+      : [];
+    if ((servicoId && (alvoDelete.length > 0 || buracos.length > 0)) || pendentes.length > 0) {
+      await AppDataSource.transaction(async (manager) => {
+        if (servicoId && alvoDelete.length > 0) {
+          datasApagadas.push(...await apagarDatasDeUploadsAbertos(servicoId, alvoDelete, manager));
+        }
+        if (servicoId && buracos.length > 0) {
+          diasRemovidosAusentes.push(...await apagarDatasDeUploadsAbertos(servicoId, buracos, manager));
+          await removerHashesDia(servicoId, buracos, manager);
+        }
+        const repo = manager.getRepository(ColetaData);
+        const LOTE = 500;
+        for (let i = 0; i < pendentes.length; i += LOTE) {
+          await repo.save(pendentes.slice(i, i + LOTE));
+        }
+      });
+    }
+
+    if (servicoId && estrategia === 'atualizar_data' && datasRegravar && datasRegravar.length > 0) {
+      await salvarHashesDia(
+        servicoId,
+        datasRegravar.map((data) => ({ data, hash: hashesPorData.get(data)! })),
+      );
+    }
+    if (servicoId && estrategia === 'inserir_data' && datasParaImportar.length > 0) {
+      const hashesInseridos = this.hashesDasDatasColeta(mapaDatas, datasParaImportar);
+      await salvarHashesDia(
+        servicoId,
+        datasParaImportar.map((data) => ({ data, hash: hashesInseridos.get(data)! })),
+      );
     }
 
     // ─── Atualizar metadados do upload ───
@@ -1452,13 +1576,23 @@ export class DeduplicacaoService {
       }
     }
 
-    if (servicoId) {
+    if (servicoId && importacaoRegravouDados({
+      diasAtualizados,
+      datasApagadas,
+      diasRemovidosAusentes,
+      importados,
+    })) {
       invalidarCacheDadosServico(servicoId);
       invalidarCacheDashboardServico(servicoId);
       dashboardCache.invalidar(servicoId);
       agendarWarmupPosUpload(servicoId);
       invalidarCacheSaudeContratos();
-      void recalcularTotaisDiaServicoSilencioso(servicoId);
+      const datasRecalc = [...new Set([
+        ...datasApagadas.map((d) => d.data),
+        ...diasRemovidosAusentes.map((d) => d.data),
+        ...(importados > 0 ? datasParaImportar : []),
+      ])];
+      void recalcularTotaisDiasServicoSilencioso(servicoId, datasRecalc);
     }
 
     return {
@@ -1472,6 +1606,8 @@ export class DeduplicacaoService {
       diasRemovidosAusentes,
       datasIgnoradasCicloFechado,
       avisos,
+      diasAtualizados,
+      diasIguais,
       modo: estrategia,
       viagensInconsistentes,
       viagensValidasDashboard: importados,
