@@ -11,3 +11,4 @@ whatsapp-inbox/
 *.xlsx
 *.xls
 *.xlsm
+!test/fixtures/*.xlsx
