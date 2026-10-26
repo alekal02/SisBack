@@ -35,6 +35,7 @@ import {
   analisarConferenciaPlanilhaVsSistema,
   type RelatorioAgenteUpload,
 } from '../services/agenteConferenciaUploadService';
+import { anexarFraseDias, fraseDiasHash, importacaoRegravouDados } from '../services/importacaoDiaHash';
 
 // Extensão para request com file do multer
 interface RequestWithFile extends Request {
@@ -182,14 +183,16 @@ export class ColetaController {
         if (avisoCiclo) mensagem += ` ${avisoCiclo}`;
         const avisoDup = (resultado.avisos || []).find((a) => a.includes('já estavam no sistema'));
         if (avisoDup) mensagem += ` ${avisoDup}`;
+        mensagem = anexarFraseDias(mensagem, resultado);
 
-        for (const s of resultado.splitPorServico || []) {
-          if (s.importados > 0) {
-            await tentarMergePlacasContrato(s.servicoId, s.planilhaUploadId);
+        if (importacaoRegravouDados(resultado)) {
+          for (const s of resultado.splitPorServico || []) {
+            if (s.importados > 0) {
+              await tentarMergePlacasContrato(s.servicoId, s.planilhaUploadId);
+            }
           }
+          invalidarCacheSaudeContratos(contractId);
         }
-
-        invalidarCacheSaudeContratos(contractId);
         res.json({
           sucesso: true,
           tipoDetectado: classificacao.tipo,
@@ -266,12 +269,20 @@ export class ColetaController {
           );
 
         const qtd = Number((resultado as any).importados ?? (resultado as any).importadas ?? 0);
-        await tentarMergePlacasContrato(alvo.id, (resultado as any).planilhaUploadId);
-        invalidarCacheSaudeContratos(contractId);
+        if (importacaoRegravouDados(resultado as { diasAtualizados?: number; datasApagadas?: unknown[]; importados?: number })) {
+          await tentarMergePlacasContrato(alvo.id, (resultado as any).planilhaUploadId);
+          invalidarCacheSaudeContratos(contractId);
+        }
         const avisos = Array.isArray((resultado as { avisos?: string[] }).avisos)
           ? (resultado as { avisos: string[] }).avisos
           : [];
         const avisoCiclo = avisos.find((a) => a.includes('ciclo'));
+        const mensagemColeta = anexarFraseDias(
+          avisoCiclo
+            ? `Coleta importada em “${alvo.nome}”: ${qtd} registro(s). ${avisoCiclo}`
+            : `Coleta importada em “${alvo.nome}”: ${qtd} registro(s).`,
+          resultado as { diasAtualizados?: number; diasIguais?: number },
+        );
         res.json({
           sucesso: true,
           tipoDetectado: classificacao.tipo,
@@ -281,12 +292,7 @@ export class ColetaController {
           ...resultado,
           importadas: qtd,
           agente,
-          mensagem: [
-            avisoCiclo
-              ? `Coleta importada em “${alvo.nome}”: ${qtd} registro(s). ${avisoCiclo}`
-              : `Coleta importada em “${alvo.nome}”: ${qtd} registro(s).`,
-            agente?.mensagem,
-          ].filter(Boolean).join(' '),
+          mensagem: [mensagemColeta, agente?.mensagem].filter(Boolean).join(' '),
         });
         return;
       }
@@ -398,10 +404,13 @@ export class ColetaController {
           if (resultadoCons.tiposSemServico.length) {
             mensagem += ` (${resultadoCons.tiposSemServico.map((t) => `${t.registros} ${t.tipoSistema} sem serviço`).join(', ')})`;
           }
+          mensagem = anexarFraseDias(mensagem, resultadoCons);
 
-          for (const s of resultadoCons.splitPorServico || []) {
-            if (s.importados > 0) {
-              await tentarMergePlacasContrato(s.servicoId, s.planilhaUploadId);
+          if (importacaoRegravouDados(resultadoCons)) {
+            for (const s of resultadoCons.splitPorServico || []) {
+              if (s.importados > 0) {
+                await tentarMergePlacasContrato(s.servicoId, s.planilhaUploadId);
+              }
             }
           }
 
@@ -542,7 +551,7 @@ export class ColetaController {
       }
 
       // Também disparar a detecção de padrão (como fazia o fluxo antigo)
-      if (servico_id) {
+      if (servico_id && importacaoRegravouDados(resultado)) {
         try {
           const { detectarPadraoPlanilha } = await import('../services/PadraoPlanilhaDetector');
           const { gerarConfigGraficosPadrao, reResolverGraficos } = await import('../services/graficosPadrao');
@@ -594,10 +603,16 @@ export class ColetaController {
       let mensagem: string;
       if (estrategia === 'atualizar_data' || estrategia === 'inserir_data') {
         const cons = (resultado as any).consolidacao;
-        const partes = [
-          `${resultado.importados} registro(s) na planilha ativa`,
-        ];
-        if (resultado.datasApagadas?.length) {
+        const semRegravar = resultado.diasAtualizados === 0
+          && (resultado.diasIguais ?? 0) > 0
+          && (resultado.importados ?? 0) === 0
+          && !(resultado.datasApagadas?.length);
+        const partes = semRegravar
+          ? [fraseDiasHash(resultado.diasAtualizados, resultado.diasIguais), 'nenhum dia foi regravado']
+          : [`${resultado.importados} registro(s) na planilha ativa`];
+        if (!semRegravar && resultado.diasAtualizados != null && resultado.diasIguais != null) {
+          partes.unshift(fraseDiasHash(resultado.diasAtualizados, resultado.diasIguais));
+        } else if (!semRegravar && resultado.datasApagadas?.length) {
           partes.push(`${resultado.datasApagadas.length} dia(s) atualizado(s)`);
         }
         if (cons?.registrosRemovidosAusentes > 0) {
@@ -612,7 +627,7 @@ export class ColetaController {
         if (cons?.uploadsRemovidos > 0) {
           partes.push(`${cons.uploadsRemovidos} planilha(s) antiga(s) removida(s)`);
         }
-        if (resultado.ignorados > 0) {
+        if (!semRegravar && resultado.ignorados > 0) {
           partes.push(`${resultado.ignorados} linha(s) ignorada(s)`);
         }
         mensagem = `Planilha processada! ${partes.join('; ')}.`;
