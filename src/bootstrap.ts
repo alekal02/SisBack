@@ -19,6 +19,7 @@ import { recuperarMensagensWhatsappPendentes } from './services/WhatsappPlanilha
 import wuzapiService from './services/WuzapiService';
 import { urlSemSegredoWebhook } from './services/wuzapiWebhookAuth';
 import { iniciarVigiaSessaoWhatsapp } from './services/WhatsappSessaoVigia';
+import { iniciarMonitorEventLoop } from './services/eventLoopMonitor';
 
 /** A sessão já conectada guarda a URL antiga. Sem isso o chatbot fica mudo depois do deploy. */
 async function garantirWebhookWuzapi(): Promise<void> {
@@ -62,6 +63,10 @@ export function garantirPastasDisco(): void {
 
 /** Só depois do servidor responder. Retomar planilha no boot derrubava o processo antes do healthcheck. */
 function agendarRetomadaWhatsapp(): void {
+  if (process.env.WHATSAPP_RETOMADA_ENABLED === 'false') {
+    console.log('[WhatsappLedger] Retomada no boot desligada (WHATSAPP_RETOMADA_ENABLED=false)');
+    return;
+  }
   const espera = parseInt(process.env.WHATSAPP_RETOMADA_MS || '20000', 10);
   setTimeout(() => {
     void (async () => {
@@ -208,6 +213,7 @@ export async function iniciarAplicacao(app: Express, port: number): Promise<void
   garantirPastasDisco();
   const servidor = app.listen(port, '0.0.0.0', () => {
     console.log(`✅ Servidor em http://0.0.0.0:${port} (health em /health, aquecimento do banco em seguida)`);
+    setImmediate(() => iniciarMonitorEventLoop());
   });
   servidor.on('error', (erro) => {
     console.error('❌ Falha ao escutar a porta:', erro);
