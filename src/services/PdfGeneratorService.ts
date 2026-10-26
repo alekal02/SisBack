@@ -4,7 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import { PDF_CACHE_MAX_ENTRADAS } from '../config/limitesRecursos';
 import { urlPermitidaNoPdf } from './pdfRecursoPermitido';
-import { enfileirarPdf } from './filaPdf';
 
 let browserInstance: Browser | null = null;
 let browserLaunching: Promise<Browser> | null = null;
@@ -133,13 +132,20 @@ function cacheKey(html: string, opts?: PdfGenerateOptions): string {
     .digest('hex');
 }
 
-function lerPdfCache(key: string): Buffer | null {
-  const cached = pdfCache.get(key);
-  if (cached && Date.now() - cached.timestamp < PDF_CACHE_TTL_MS) return cached.buffer;
-  return null;
-}
+/**
+ * Converte HTML em PDF reutilizando instância do Puppeteer (muito mais rápido).
+ */
+export async function htmlToPdf(html: string, opts?: PdfGenerateOptions): Promise<Buffer> {
+  const useCache = opts?.useCache !== false;
+  const key = cacheKey(html, opts);
 
-async function gerarHtmlPdf(html: string, opts: PdfGenerateOptions | undefined, key: string, useCache: boolean): Promise<Buffer> {
+  if (useCache) {
+    const cached = pdfCache.get(key);
+    if (cached && Date.now() - cached.timestamp < PDF_CACHE_TTL_MS) {
+      return cached.buffer;
+    }
+  }
+
   const browser = await getBrowser();
   const page = await browser.newPage();
 
@@ -182,25 +188,6 @@ async function gerarHtmlPdf(html: string, opts: PdfGenerateOptions | undefined, 
       await liberarNavegadorPdf();
     }
   }
-}
-
-/**
- * Converte HTML em PDF. O Chrome roda um de cada vez para não estourar a memória.
- */
-export async function htmlToPdf(html: string, opts?: PdfGenerateOptions): Promise<Buffer> {
-  const useCache = opts?.useCache !== false;
-  const key = cacheKey(html, opts);
-  if (useCache) {
-    const cached = lerPdfCache(key);
-    if (cached) return cached;
-  }
-  return enfileirarPdf(async () => {
-    if (useCache) {
-      const cached = lerPdfCache(key);
-      if (cached) return cached;
-    }
-    return gerarHtmlPdf(html, opts, key, useCache);
-  });
 }
 
 /** Fecha o Chrome do PDF e devolve memória ao processo. */

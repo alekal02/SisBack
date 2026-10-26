@@ -13,7 +13,6 @@ import { migrateMediaHorasViagemKpi } from './database/migrate_media_horas_viage
 import { migratePesoCelulasPlanilha } from './database/migrate_peso_celulas_planilha';
 import { migrateWhatsappPdfSobDemanda } from './database/migrate_whatsapp_pdf_sob_demanda';
 import { migrateArquivosStorage } from './database/migrate_arquivos_storage';
-import { migrateImportacaoDiaHash } from './database/migrate_importacao_dia_hash';
 import { sincronizarKpisUniversaisBiblioteca } from './database/sincronizarKpisUniversaisBiblioteca';
 import { iniciarAgendamentoWarmupExecutivo } from './services/executivoCacheWarmupService';
 import { recuperarMensagensWhatsappPendentes } from './services/WhatsappPlanilhaPipelineService';
@@ -153,11 +152,6 @@ export async function prepararBancoAtivo(): Promise<void> {
       await migrateArquivosStorage();
     } catch (err) {
       console.error('⚠️ Erro na migration de arquivos_storage:', err);
-    }
-    try {
-      await migrateImportacaoDiaHash();
-    } catch (err) {
-      console.error('⚠️ Erro na migration de importacao_dia_hash:', err);
     }
   } else {
     console.log('⏭️ SKIP_STARTUP_MIGRATIONS=true — migrations automáticas ignoradas');
