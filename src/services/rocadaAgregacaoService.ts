@@ -15,7 +15,6 @@ import {
 } from '../utils/periodoCicloContrato';
 
 import { sqlAreaM2 } from './metricaServicoSql';
-import { sqlSomenteUploadVigenteDoDia } from './uploadVisivelRelatorio';
 
 /** Expressão SQL da área m² no JSONB (aliases canônicos, sem QUANTITATIVO). */
 export const AREA_M2_SQL = sqlAreaM2('c');
@@ -183,7 +182,6 @@ async function agregarEscopo(
       qb.andWhere(`${alias}.dataSaida <= :fim`, { fim: `${dataFim}T23:59:59.999Z` });
     }
     if (tipoSql) qb.andWhere(tipoSql.replace(/\bc\./g, `${alias}.`));
-    qb.andWhere(sqlSomenteUploadVigenteDoDia(alias));
     return qb;
   };
 

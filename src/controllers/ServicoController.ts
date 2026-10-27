@@ -1260,7 +1260,9 @@ export class ServicoController {
         || tipo === TipoServico.CAPINA || tipo === 'capina'
         || tipo === TipoServico.VARRICAO || tipo === 'varricao'
         || tipo === TipoServico.PODA || tipo === 'poda'
-        || tipo === 'pintura_meio_fio'
+        || tipo === TipoServico.PINTURA_MEIO_FIO || tipo === 'pintura_meio_fio'
+        || tipo === TipoServico.REMOCAO || tipo === 'remocao'
+        || tipo === TipoServico.GERAL || tipo === 'geral'
       );
       const page = req.query.page ? Math.max(1, parseInt(String(req.query.page), 10) || 1) : undefined;
       // Pagina por padrão (coleta e roçada) — evita payloads de dezenas de MB/dia.

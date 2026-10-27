@@ -49,6 +49,14 @@ describe('produção — não reimporta linha já existente', () => {
     assert.equal(curta, igual);
   });
 
+  it('mantém quantidades diferentes no mesmo local e dia', () => {
+    const a = coleta({ dados: { QUANTITATIVO: 120, AREA_M2: 120, LOCAL: 'RUA DAS FLORES', SETOR: '1', EQUIPAMENTO: 'ROÇADEIRA' } });
+    const b = coleta({ dados: { QUANTITATIVO: 80, AREA_M2: 80, LOCAL: 'RUA DAS FLORES', SETOR: '1', EQUIPAMENTO: 'ROÇADEIRA' } });
+    assert.notEqual(chaveProducaoColeta(a), chaveProducaoColeta(b));
+    const { novas } = filtrarColetasProducaoNovas([a, b], (linha) => linha, new Set());
+    assert.equal(novas.length, 2);
+  });
+
   it('pula duplicata do banco e duplicata no próprio arquivo', () => {
     const existentes = new Set([chaveProducaoColeta(coleta({ dados: { QUANTITATIVO: 120 } }))]);
     const linhas = [

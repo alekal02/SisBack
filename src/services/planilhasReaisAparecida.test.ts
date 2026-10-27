@@ -30,6 +30,8 @@ import { nomeAbaColeta, linhasExcelPreenchidas } from './abaColeta';
 import { razoesKmDeRegistros } from './kmValido';
 import { linhasFormulaPesoTotalVazia, montarConferencia } from './conferenciaImportacaoService';
 import { MOTIVO_LINHA_IGNORADA } from './importacaoLinhaIgnorada';
+import { camposMetricaDeRegistro, metricaOficialServico } from '@sistemma/shared';
+import { calcularKpisAtivos } from './kpiCalculoServicoService';
 
 const FIXTURES = path.join(__dirname, '..', '..', 'test', 'fixtures');
 
@@ -194,6 +196,7 @@ function importarProducaoComoUpload(buffer: Buffer, diaInicioCiclo: number) {
   let repetidas = 0;
   const foraPorServico: Record<string, number> = {};
   const porServico = new Map<string, { nome: string; regs: number; areaM2: number; km: number }>();
+  const coletasPorServico = new Map<string, ColetaData[]>();
 
   for (const [, linhasServico] of agruparLinhasPorServicoAba(parsed.linhas)) {
     const nome = linhasServico[0].nomeServico;
@@ -225,6 +228,7 @@ function importarProducaoComoUpload(buffer: Buffer, diaInicioCiclo: number) {
       areaM2: round2(areaM2),
       km: round2(km),
     });
+    coletasPorServico.set(nome, novas);
   }
 
   const importadas = [...porServico.values()].reduce((s, v) => s + v.regs, 0);
@@ -235,7 +239,32 @@ function importarProducaoComoUpload(buffer: Buffer, diaInicioCiclo: number) {
     foraPorServico,
     repetidas,
     porServico,
+    coletasPorServico,
     datasIgnoradas: restrito.ignoradas,
+  };
+}
+
+function totaisProducao(tipo: string, rows: ColetaData[]): { dashboard: number; relatorio: number } {
+  const vazio = () => ({ areaM2: 0, metroLinear: 0, kmLinear: 0, qtdArvore: 0, quantitativo: 0 });
+  const porDia = new Map<string, ReturnType<typeof vazio>>();
+  const total = vazio();
+  for (const c of rows) {
+    if (c.validoDashboard === false || !c.dataSaida) continue;
+    const dia = isoDia(c.dataSaida)!;
+    const campos = camposMetricaDeRegistro((c.dados || {}) as Record<string, unknown>);
+    const acc = porDia.get(dia) || vazio();
+    for (const chave of ['areaM2', 'metroLinear', 'kmLinear', 'qtdArvore', 'quantitativo'] as const) {
+      const n = Number(campos[chave]) || 0;
+      acc[chave] += n;
+      total[chave] += n;
+    }
+    porDia.set(dia, acc);
+  }
+  let relatorio = 0;
+  for (const campos of porDia.values()) relatorio += metricaOficialServico(tipo, campos).valor;
+  return {
+    dashboard: round2(metricaOficialServico(tipo, total).valor),
+    relatorio: round2(relatorio),
   };
 }
 
@@ -441,5 +470,73 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
     }
 
     assert.equal(diffs.length, 0, diffs.join('; '));
+  });
+
+  it('produção: dashboard do serviço, executivo e relatório do dia coincidem', () => {
+    const r = importarProducaoComoUpload(producaoBuf, 25);
+    const alvos = [
+      { nome: 'Roçada Manual', tipo: 'rocadeira', expr: 'SUM(Area m²)', coluna: 'Area m²', campo: 'areaM2' as const },
+      { nome: 'Roçada Mecanizada', tipo: 'rocadeira', expr: 'SUM(Area m²)', coluna: 'Area m²', campo: 'areaM2' as const },
+      { nome: 'Varrição Manual', tipo: 'varricao', expr: 'SUM(KM Linear)', coluna: 'KM Linear', campo: 'km' as const },
+      { nome: 'Varrição Mecanizada', tipo: 'varricao', expr: 'SUM(KM Linear)', coluna: 'KM Linear', campo: 'km' as const },
+    ];
+    const diffs: string[] = [];
+    for (const alvo of alvos) {
+      const rows = r.coletasPorServico.get(alvo.nome) || [];
+      const esperado = r.porServico.get(alvo.nome);
+      const tela = totaisProducao(alvo.tipo, rows);
+      const brutos = (PlanilhaService as unknown as {
+        converterColetasParaBrutos: (d: ColetaData[], apenasValidos: boolean) => Record<string, unknown>[];
+      }).converterColetasParaBrutos(rows, true);
+      const kpi = calcularKpisAtivos(brutos, {}, [{
+        nome: 'Total',
+        expressao: alvo.expr,
+        ativo: true,
+      }], 0, [alvo.coluna]);
+      const executivo = round2(Number(kpi[0]?.valor) || 0);
+      const referencia = round2(Number(esperado?.[alvo.campo]) || 0);
+      if (tela.dashboard !== executivo || tela.dashboard !== tela.relatorio || tela.dashboard !== referencia) {
+        diffs.push(
+          `${alvo.nome}: dashboard ${tela.dashboard} | executivo ${executivo} | relatório do dia ${tela.relatorio} | referência ${referencia}`,
+        );
+      }
+    }
+    assert.equal(diffs.length, 0, diffs.join('; '));
+  });
+
+  it('produção: várias linhas no mesmo local e dia entram nos três relatórios', () => {
+    const dia = new Date('2026-10-01T12:00:00.000Z');
+    const localCheio = 'RUA DAS FLORES CENTO E TRINTA E SEIS';
+    const linhas = [120.5, 80.25, 40].map((area) => {
+      const c = new ColetaData();
+      c.dataSaida = dia;
+      c.validoDashboard = true;
+      c.distrito = localCheio.slice(0, 50);
+      c.regional = c.distrito;
+      c.tipoCaminhao = 'ROÇADEIRA 01';
+      c.dados = {
+        'Area m²': area,
+        AREA_M2: area,
+        LOCAL: localCheio,
+        DISTRITO_COMPLETO: localCheio,
+        SETOR: 'SETOR 1',
+        EQUIPAMENTO: 'ROÇADEIRA 01',
+        _tipoServico: 'rocadeira',
+      };
+      return c;
+    });
+    const tela = totaisProducao('rocadeira', linhas);
+    const brutos = (PlanilhaService as unknown as {
+      converterColetasParaBrutos: (d: ColetaData[], apenasValidos: boolean) => Record<string, unknown>[];
+    }).converterColetasParaBrutos(linhas, true);
+    const kpi = calcularKpisAtivos(brutos, {}, [{
+      nome: 'Total',
+      expressao: 'SUM(Area m²)',
+      ativo: true,
+    }], 0, ['Area m²']);
+    const executivo = round2(Number(kpi[0]?.valor) || 0);
+    assert.equal(tela.dashboard, 240.75);
+    assert.equal(executivo, 240.75);
+    assert.equal(tela.relatorio, 240.75);
   });
 });

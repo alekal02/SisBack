@@ -20,7 +20,6 @@ import {
 import { sqlDataIsoDia, sqlExprPesoEfetivoKg, sqlSumPesoEfetivoKg, sqlSumViagens } from './viagensPorRotaService';
 import { sqlAreaM2, sqlKmLinear, sqlMetroLinear, sqlQtdArvore, sqlQuantitativo } from './metricaServicoSql';
 import { TipoServico } from '../enums/TipoServico';
-import { sqlSomenteUploadVigenteDoDia } from './uploadVisivelRelatorio';
 import { deduplicarKpisLista } from './kpiDeduplicacaoService';
 import { invalidarCacheDadosServico } from './servicoDadosCache';
 import { invalidarCacheDashboardServico } from './comparacaoCache';
@@ -1043,15 +1042,18 @@ export class PlanilhaService {
     // Enriquecer + converter para objetos planos; revalidar viagens (corrige validoDashboard=false legado)
     const objetos = dados.map(d => {
       const tipoLinhaPre = String(d.dados?._tipoServico || '');
-      const modeloUnificadoPre = String(d.dados?._modeloPlanilha || '') === 'servicos_unificados';
+      const modeloPre = String(d.dados?._modeloPlanilha || '');
+      const modeloProducaoPre = modeloPre === 'servicos_unificados' || modeloPre === 'consolidado_producao';
       const ehServicoUnidadePre =
         pularValidacaoViagem
-        || modeloUnificadoPre
+        || modeloProducaoPre
         || tipoLinhaPre === 'rocadeira'
         || tipoLinhaPre === 'capina'
         || tipoLinhaPre === 'varricao'
         || tipoLinhaPre === 'poda'
-        || tipoLinhaPre === 'pintura_meio_fio';
+        || tipoLinhaPre === 'pintura_meio_fio'
+        || tipoLinhaPre === 'remocao'
+        || tipoLinhaPre === 'geral';
 
       // Capina/varrição/poda: NÃO enriquecer com regras de coleta
       // (encontrarValorColuna fuzzy casa "id" com "KM SAIDA" etc. e corrompe campos)
@@ -1101,15 +1103,18 @@ export class PlanilhaService {
       }
 
       const tipoLinha = String(d.dados?._tipoServico || obj._tipoServico || '');
-      const modeloUnificado = String(d.dados?._modeloPlanilha || obj._modeloPlanilha || '') === 'servicos_unificados';
+      const modelo = String(d.dados?._modeloPlanilha || obj._modeloPlanilha || '');
+      const modeloProducao = modelo === 'servicos_unificados' || modelo === 'consolidado_producao';
       const ehServicoUnidade =
         pularValidacaoViagem
-        || modeloUnificado
+        || modeloProducao
         || tipoLinha === 'rocadeira'
         || tipoLinha === 'capina'
         || tipoLinha === 'varricao'
         || tipoLinha === 'poda'
-        || tipoLinha === 'pintura_meio_fio';
+        || tipoLinha === 'pintura_meio_fio'
+        || tipoLinha === 'remocao'
+        || tipoLinha === 'geral';
 
       if (ehServicoUnidade) {
         // Capina/varrição/poda/roçada não usam regras de placa/KM/peso da coleta
@@ -1676,17 +1681,6 @@ export class PlanilhaService {
     const uploadIds = await this.getUploadIdsPorServico(servicoId);
     if (uploadIds.length === 0) return [];
 
-    const servico = await this.servicoRepo.findOne({ where: { id: servicoId }, select: ['id', 'tipo'] });
-    const producao = servico != null && [
-      TipoServico.ROCADEIRA,
-      TipoServico.CAPINA,
-      TipoServico.VARRICAO,
-      TipoServico.PODA,
-      TipoServico.PINTURA_MEIO_FIO,
-      TipoServico.REMOCAO,
-      TipoServico.GERAL,
-    ].includes(servico.tipo as TipoServico);
-
     const areaExpr = sqlAreaM2('c');
     const metroLinearExpr = sqlMetroLinear('c');
     const kmLinearExpr = sqlKmLinear('c');
@@ -1708,9 +1702,6 @@ export class PlanilhaService {
         `COALESCE(SUM(${quantitativoExpr}), 0) as quantitativo`,
       ])
       .where('c.planilhaUploadId IN (:...uploadIds)', { uploadIds });
-    if (producao) {
-      qb.andWhere(sqlSomenteUploadVigenteDoDia('c'));
-    }
     aplicarFiltroViagensValidasDashboard(qb, 'c');
     qb.andWhere(`${dataIsoExpr} >= :inicio`, { inicio: dataInicio })
       .andWhere(`${dataIsoExpr} <= :fim`, { fim: dataFim })

@@ -4,6 +4,7 @@ import {
   escolherUploadDoDia,
   linhasVisiveisNoRelatorio,
   somarLinhasVisiveis,
+  sqlSomenteUploadVigenteDoDia,
   type LinhaRelatorioProducao,
 } from './uploadVisivelRelatorio';
 
@@ -16,6 +17,12 @@ const SETORES = [
 ];
 
 describe('relatório de varrição com vários uploads', () => {
+  it('não agrupa nem descarta linha pelo local de 50 caracteres', () => {
+    const sql = sqlSomenteUploadVigenteDoDia('c');
+    assert.equal(sql, 'TRUE');
+    assert.equal(/distrito|regional|ROW_NUMBER|50/i.test(sql), false);
+  });
+
   it('prefere o upload aberto mais recente', () => {
     const id = escolherUploadDoDia([
       { uploadId: 1, criadoEm: 10, fechado: false },
@@ -60,30 +67,18 @@ describe('relatório de varrição com vários uploads', () => {
     }
 
     const visiveis = linhasVisiveisNoRelatorio(linhas);
-    const porDia = new Map<string, number>();
-    for (const linha of visiveis) porDia.set(linha.dia, (porDia.get(linha.dia) || 0) + 1);
-    for (const dia of [...diasParciais, ...diasCheios]) {
-      assert.equal(porDia.get(dia), 5, dia);
-    }
-    assert.equal(visiveis.some((linha) => linha.local === 'RUA ANTIGA'), false);
-    assert.equal(somarLinhasVisiveis(linhas), 34773.768);
+    assert.equal(visiveis.length, linhas.length);
+    assert.equal(visiveis.some((linha) => linha.local === 'RUA ANTIGA'), true);
+    assert.equal(somarLinhasVisiveis(linhas), Math.round(linhas.reduce((s, l) => s + l.valor, 0) * 1000) / 1000);
   });
 
-  it('mantém os 5 setores quando todo o envio novo gravou só 2', () => {
-    const dias = ['2026-09-25', '2026-09-26', '2026-09-27'];
-    const linhas: LinhaRelatorioProducao[] = [];
-    for (const dia of dias) {
-      for (const setor of SETORES) {
-        linhas.push({ dia, uploadId: 1, criadoEm: 1, fechado: false, ...setor });
-      }
-      for (const setor of [SETORES[0], SETORES[4]]) {
-        linhas.push({ dia, uploadId: 2, criadoEm: 2, fechado: false, ...setor });
-      }
-    }
-    const visiveis = linhasVisiveisNoRelatorio(linhas);
-    for (const dia of dias) {
-      assert.equal(visiveis.filter((linha) => linha.dia === dia).length, 5, dia);
-    }
-    assert.equal(Math.round(somarLinhasVisiveis(linhas) * 1000) / 1000, 5795.628);
+  it('soma várias linhas do mesmo local e do mesmo dia', () => {
+    const linhas: LinhaRelatorioProducao[] = [
+      { dia: '2026-09-01', uploadId: 1, criadoEm: 1, fechado: false, local: 'RUA DAS FLORES', valor: 120.5 },
+      { dia: '2026-09-01', uploadId: 1, criadoEm: 1, fechado: false, local: 'RUA DAS FLORES', valor: 80.25 },
+      { dia: '2026-09-01', uploadId: 1, criadoEm: 1, fechado: false, local: 'RUA DAS FLORES', valor: 40 },
+    ];
+    assert.equal(linhasVisiveisNoRelatorio(linhas).length, 3);
+    assert.equal(somarLinhasVisiveis(linhas), 240.75);
   });
 });
