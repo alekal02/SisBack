@@ -9,13 +9,27 @@ import { ColetaData } from '../entities/ColetaData';
 import { ImportacaoLinhaIgnorada } from '../entities/ImportacaoLinhaIgnorada';
 import { PlanilhaUpload } from '../entities/PlanilhaUpload';
 import { Servico } from '../entities/Servico';
+import { metricaDeRegistro } from '@sistemma/shared';
 import { parseDataPlanilha } from '../utils/formatarDataPlanilha';
+import {
+  calcularCicloMensalContrato,
+  deslocarMesReferencia,
+  inferirCicloReferenciaDeDatas,
+  normalizarDiaInicioCiclo,
+} from '../utils/periodoCicloContrato';
 import { nomeAbaColeta, linhasExcelPreenchidas } from './abaColeta';
 import {
   catalogoAbaProducao,
   sheetEhConsolidado,
 } from './consolidadoProducaoPlanilhaParser';
 import { razoesKmDeRegistros } from './kmValido';
+import {
+  sqlAreaM2,
+  sqlKmLinear,
+  sqlMetroLinear,
+  sqlQtdArvore,
+  sqlQuantitativo,
+} from './metricaServicoSql';
 import { contarViagensPorRotaRegistro, obterPesoTotalRegistro } from './viagensPorRotaService';
 
 const LIMITE_LINHAS_MENSAGEM = 10;
@@ -51,11 +65,16 @@ export interface TotalServicoConferencia {
 }
 
 export interface AlertaConferencia {
-  codigo: 'hodometro' | 'placa' | 'formula_peso' | 'consolidado' | 'servico_criado';
+  codigo: 'hodometro' | 'placa' | 'formula_peso' | 'consolidado' | 'servico_criado' | 'valor_fora';
   texto: string;
   quantidade: number;
   linhas: number[];
   placa?: string;
+}
+
+export interface DiaQuantidade {
+  data: string;
+  valor: number;
 }
 
 export interface ConferenciaImportacao {
@@ -280,6 +299,197 @@ export function formatarMensagemConferencia(conf: Omit<ConferenciaImportacao, 'm
   return partes.join('\n');
 }
 
+const DIAS_SEGUIDOS_IGUAIS = 5;
+
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+function formatarQuantidadeAlerta(n: number): string {
+  const arred = round3(n);
+  const texto = arred.toFixed(3).replace(/\.?0+$/, '');
+  const negativo = texto.startsWith('-');
+  const [inteiroBruto, frac] = texto.replace('-', '').split('.');
+  const comPonto = inteiroBruto.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const corpo = frac ? `${comPonto},${frac}` : comPonto;
+  return negativo ? `-${corpo}` : corpo;
+}
+
+function diaMes(iso: string): string {
+  const partes = iso.split('-');
+  if (partes.length !== 3) return iso;
+  return `${partes[2]}/${partes[1]}`;
+}
+
+function diaSeguinte(iso: string): string {
+  const [ano, mes, dia] = iso.split('-').map((p) => parseInt(p, 10));
+  const data = new Date(Date.UTC(ano, mes - 1, dia + 1));
+  return data.toISOString().slice(0, 10);
+}
+
+export function somarQuantidadePorDia(dias: DiaQuantidade[]): DiaQuantidade[] {
+  const mapa = new Map<string, number>();
+  for (const dia of dias) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dia.data) || !(dia.valor > 0)) continue;
+    mapa.set(dia.data, (mapa.get(dia.data) || 0) + dia.valor);
+  }
+  return [...mapa.entries()]
+    .map(([data, valor]) => ({ data, valor }))
+    .sort((a, b) => a.data.localeCompare(b.data));
+}
+
+export function medianaNumerica(valores: number[]): number | null {
+  const nums = valores.filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+  if (nums.length === 0) return null;
+  const meio = Math.floor(nums.length / 2);
+  if (nums.length % 2 === 1) return nums[meio];
+  return (nums[meio - 1] + nums[meio]) / 2;
+}
+
+function textoValorFora(nome: string, data: string, valor: number, unidade: string, mediana: number | null): string {
+  const sufixo = unidade ? ` ${unidade}` : '';
+  const base = `${nome} ${diaMes(data)}: ${formatarQuantidadeAlerta(valor)}${sufixo}`;
+  if (mediana != null && mediana > 0) {
+    return `${base}, mediana ${formatarQuantidadeAlerta(mediana)}${sufixo} — confira`;
+  }
+  return `${base} — confira`;
+}
+
+/**
+ * Compara cada dia importado com a mediana dos dias dos dois ciclos anteriores.
+ * Mais de 3× acima, abaixo de 1/3, ou o mesmo valor em 5+ dias seguidos: só avisa.
+ */
+export function alertasQuantidadeForaDoNormal(opts: {
+  nome: string;
+  unidade: string;
+  dias: DiaQuantidade[];
+  historico: DiaQuantidade[];
+  diasCiclo?: DiaQuantidade[];
+}): AlertaConferencia[] {
+  const nome = String(opts.nome || '').trim() || 'Serviço';
+  const alvo = somarQuantidadePorDia(opts.dias);
+  if (alvo.length === 0) return [];
+  const ciclo = somarQuantidadePorDia(opts.diasCiclo && opts.diasCiclo.length ? opts.diasCiclo : opts.dias);
+  const porData = new Map(ciclo.map((dia) => [dia.data, dia.valor]));
+  const mediana = medianaNumerica(somarQuantidadePorDia(opts.historico).map((dia) => dia.valor));
+  const repetidos = new Set<string>();
+  let sequencia: DiaQuantidade[] = [];
+  const fechar = () => {
+    if (sequencia.length >= DIAS_SEGUIDOS_IGUAIS) {
+      for (const dia of sequencia) repetidos.add(dia.data);
+    }
+    sequencia = [];
+  };
+  for (const dia of ciclo) {
+    const anterior = sequencia[sequencia.length - 1];
+    const continua = anterior
+      && diaSeguinte(anterior.data) === dia.data
+      && round3(anterior.valor) === round3(dia.valor);
+    if (continua) sequencia.push(dia);
+    else {
+      fechar();
+      sequencia = [dia];
+    }
+  }
+  fechar();
+
+  const alertas: AlertaConferencia[] = [];
+  for (const dia of alvo) {
+    const valor = porData.get(dia.data) ?? dia.valor;
+    const foraDaMediana = mediana != null && mediana > 0
+      && (round3(valor) > round3(mediana * 3) || round3(valor) < round3(mediana / 3));
+    if (!foraDaMediana && !repetidos.has(dia.data)) continue;
+    alertas.push({
+      codigo: 'valor_fora',
+      quantidade: 1,
+      linhas: [],
+      texto: textoValorFora(nome, dia.data, valor, opts.unidade, mediana),
+    });
+  }
+  return alertas;
+}
+
+function metricaSqlDoTipo(tipo: string | null | undefined): { expr: string; unidade: string } | null {
+  switch (String(tipo || '')) {
+    case 'rocadeira':
+      return { expr: sqlAreaM2('d'), unidade: 'm²' };
+    case 'capina':
+      return { expr: sqlMetroLinear('d'), unidade: 'm' };
+    case 'varricao':
+      return { expr: sqlKmLinear('d'), unidade: 'km' };
+    case 'poda':
+      return { expr: sqlQtdArvore('d'), unidade: 'arv' };
+    case 'pintura_meio_fio':
+      return { expr: sqlMetroLinear('d'), unidade: 'm' };
+    case 'remocao':
+    case 'geral':
+      return { expr: sqlQuantitativo('d'), unidade: 'pts' };
+    default:
+      return null;
+  }
+}
+
+function diasDaImportacao(registros: RegistroConferencia[], tipo: string): DiaQuantidade[] {
+  const dias: DiaQuantidade[] = [];
+  for (const registro of registros) {
+    if (registro.validoDashboard === false) continue;
+    const data = isoDia(registro.dataSaida ?? null);
+    if (!data) continue;
+    const valor = metricaDeRegistro(tipo, (registro.dados || {}) as Record<string, unknown>).valor;
+    if (valor > 0) dias.push({ data, valor });
+  }
+  return somarQuantidadePorDia(dias);
+}
+
+async function alertasValorForaDoUpload(
+  servico: Servico,
+  registros: RegistroConferencia[],
+): Promise<AlertaConferencia[]> {
+  const metrica = metricaSqlDoTipo(servico.tipo);
+  if (!metrica) return [];
+  const diasUpload = diasDaImportacao(registros, servico.tipo);
+  if (diasUpload.length === 0) return [];
+  const diaInicio = normalizarDiaInicioCiclo(servico.contract?.diaInicioCiclo);
+  const ref = inferirCicloReferenciaDeDatas(diasUpload.map((dia) => dia.data), diaInicio);
+  if (!ref) return [];
+  const ciclo = calcularCicloMensalContrato(ref.anoReferencia, ref.mesReferencia, diaInicio);
+  const anterior = deslocarMesReferencia(ref.mesReferencia, ref.anoReferencia, -1);
+  const doisAtras = deslocarMesReferencia(ref.mesReferencia, ref.anoReferencia, -2);
+  const inicioHistorico = calcularCicloMensalContrato(
+    doisAtras.ano,
+    doisAtras.mes,
+    diaInicio,
+  ).dataInicio;
+  const fimAnterior = calcularCicloMensalContrato(anterior.ano, anterior.mes, diaInicio).dataFim;
+  const linhas = await AppDataSource.query(
+    `SELECT to_char(d."dataSaida", 'YYYY-MM-DD') AS dia,
+            SUM(${metrica.expr}) AS valor
+     FROM coleta_dados d
+     WHERE d."planilhaUploadId" IN (
+       SELECT u.id FROM planilha_uploads u WHERE u.servico_id = $1
+     )
+       AND COALESCE(d."validoDashboard", true) = true
+       AND d."dataSaida" >= $2
+       AND d."dataSaida" <= $3
+     GROUP BY 1
+     HAVING SUM(${metrica.expr}) > 0
+     ORDER BY 1`,
+    [servico.id, inicioHistorico, ciclo.dataFim],
+  ) as Array<{ dia: string; valor: string | number }>;
+  const lidos = linhas
+    .map((linha) => ({ data: String(linha.dia).slice(0, 10), valor: Number(linha.valor) }))
+    .filter((dia) => dia.valor > 0);
+  const historico = lidos.filter((dia) => dia.data >= inicioHistorico && dia.data <= fimAnterior);
+  const diasCiclo = lidos.filter((dia) => dia.data >= ciclo.dataInicio && dia.data <= ciclo.dataFim);
+  return alertasQuantidadeForaDoNormal({
+    nome: servico.nome,
+    unidade: metrica.unidade,
+    dias: diasUpload,
+    historico,
+    diasCiclo: diasCiclo.length ? diasCiclo : diasUpload,
+  });
+}
+
 export function montarConferencia(opts: {
   nome: string;
   registros: RegistroConferencia[];
@@ -289,6 +499,7 @@ export function montarConferencia(opts: {
   formulaPesoTotalVazia?: number[];
   consolidadoDesatualizado?: boolean;
   servicosCriados?: string[];
+  alertasQuantidade?: AlertaConferencia[];
 }): ConferenciaImportacao {
   const modelo = opts.modelo || null;
   const producaoPorModelo = !!modelo && modelo !== 'coleta';
@@ -322,6 +533,10 @@ export function montarConferencia(opts: {
       linhas: [],
       texto: `serviço ${limpo} criado`,
     });
+  }
+  for (const extra of opts.alertasQuantidade || []) {
+    if (extra.codigo !== 'valor_fora' || !extra.texto) continue;
+    alertas.push(extra);
   }
   let totaisColeta: ConferenciaImportacao['totaisColeta'] = null;
   let totaisServico: TotalServicoConferencia[] = [];
@@ -378,11 +593,13 @@ export function juntarConferencias(lista: ConferenciaImportacao[], nome: string)
   let hodometro = 0;
   const formula = new Set<number>();
   let consolidado = false;
+  const valorFora: AlertaConferencia[] = [];
   for (const conf of lista) {
     for (const alerta of conf.alertas) {
       if (alerta.codigo === 'hodometro') hodometro += alerta.quantidade;
       if (alerta.codigo === 'formula_peso') alerta.linhas.forEach((n) => formula.add(n));
       if (alerta.codigo === 'consolidado') consolidado = true;
+      if (alerta.codigo === 'valor_fora') valorFora.push(alerta);
       if (alerta.codigo === 'placa' && alerta.placa) {
         const prev = placas.get(alerta.placa);
         placas.set(alerta.placa, {
@@ -427,6 +644,7 @@ export function juntarConferencias(lista: ConferenciaImportacao[], nome: string)
       texto: 'CONSOLIDADO possivelmente desatualizado',
     });
   }
+  alertas.push(...valorFora);
   let totaisColeta: ConferenciaImportacao['totaisColeta'] = null;
   if (tipo === 'coleta') {
     const comTotais = lista.filter((c) => c.totaisColeta);
@@ -645,7 +863,7 @@ export async function conferenciaDoUpload(planilhaUploadId: number): Promise<Con
   const servico = upload.servico_id
     ? await AppDataSource.getRepository(Servico).findOne({
       where: { id: upload.servico_id },
-      select: ['id', 'nome'],
+      relations: ['contract'],
     })
     : null;
 
@@ -669,6 +887,14 @@ export async function conferenciaDoUpload(planilhaUploadId: number): Promise<Con
     ? importadas + ignoradasRows.length
     : (upload.totalLinhas || importadas + ignoradasRows.length);
   const alertas = upload.resumo?.alertasArquivo;
+  let alertasQuantidade: AlertaConferencia[] = [];
+  if (servico) {
+    try {
+      alertasQuantidade = await alertasValorForaDoUpload(servico, registros);
+    } catch (err: any) {
+      console.warn('[Conferencia] valor fora do normal:', err?.message || err);
+    }
+  }
 
   return montarConferencia({
     nome: servico?.nome || upload.nomeArquivo.replace(/\.[^.]+$/, ''),
@@ -679,6 +905,7 @@ export async function conferenciaDoUpload(planilhaUploadId: number): Promise<Con
     formulaPesoTotalVazia: alertas?.formulaPesoTotalVazia || [],
     consolidadoDesatualizado: !!alertas?.consolidadoDesatualizado,
     servicosCriados: alertas?.servicosCriados || servicosCriadosDoResumo(upload.resumo),
+    alertasQuantidade,
   });
 }
 

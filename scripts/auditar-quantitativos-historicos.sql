@@ -1,5 +1,7 @@
 -- Auditoria somente leitura dos quantitativos históricos.
 -- Não grava dado: a transação é READ ONLY.
+-- A seção 9_dado_suspeito só rotula a Varrição Mecanizada de Aparecida
+-- no ciclo 25/08–24/09. Os lançamentos continuam como estão.
 -- Rode pela máquina Docker com auditar-quantitativos-historicos.ps1.
 --
 -- Regra nova (relatórios atuais):
@@ -435,6 +437,29 @@ indicadores AS (
   CROSS JOIN LATERAL regexp_matches(ct."kpisConfig"::text, '.{0,70}count\s*\(\s*\*\s*\).{0,70}', 'gi') AS m(trecho)
   WHERE ct."kpisConfig"::text ~* 'count\s*\(\s*\*\s*\)'
 ),
+dado_suspeito AS (
+  SELECT
+    '9_dado_suspeito' AS secao,
+    contrato,
+    servico,
+    'varricao' AS tipo,
+    'mecanizada' AS classe,
+    '2026-08-25 a 2026-09-24' AS mes,
+    'dado suspeito' AS metrica,
+    replace(to_char(ROUND(MIN(km_dia)::numeric, 3), 'FM999999999999990.000'), '.', ',') AS valor,
+    'km' AS unidade,
+    'dado_suspeito' AS classificacao,
+    'Varrição Mecanizada de Aparecida, ciclo 25/08–24/09, marcada como dado suspeito. '
+      || 'Os lançamentos não foram alterados. dias=' || COUNT(*)
+      || ' km_distintos=' || COUNT(DISTINCT ROUND(km_dia::numeric, 3))
+      AS detalhe
+  FROM varredura_dia
+  WHERE contrato ~* 'aparecida'
+    AND dia >= '2026-08-25'
+    AND dia <= '2026-09-24'
+    AND km_dia > 0
+  GROUP BY contrato, servico
+),
 amostra AS (
   SELECT
     '8_amostra' AS secao,
@@ -465,6 +490,7 @@ SELECT * FROM (
   UNION ALL SELECT * FROM conflitos
   UNION ALL SELECT * FROM duplicados
   UNION ALL SELECT * FROM varredura_repetida
+  UNION ALL SELECT * FROM dado_suspeito
   UNION ALL SELECT * FROM indicadores
   UNION ALL SELECT * FROM amostra
 ) resultado
