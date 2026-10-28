@@ -13,12 +13,16 @@ import { GraficoPadraoConfig } from '../entities/GraficoPadraoConfig';
 import { WhatsappGrupoMapa } from '../entities/WhatsappGrupoMapa';
 import { Tenant } from '../entities/Tenant';
 import { WhatsappGrupoRoteamento } from '../entities/WhatsappGrupoRoteamento';
+import { WhatsappAutorizado } from '../entities/WhatsappAutorizado';
+import { WhatsappTentativaNaoAutorizada } from '../entities/WhatsappTentativaNaoAutorizada';
 
 /** Entidades do banco de controle (login, tenants, roteamento WhatsApp). */
 export const CONTROL_ENTITIES = [
   User,
   Tenant,
   WhatsappGrupoRoteamento,
+  WhatsappAutorizado,
+  WhatsappTentativaNaoAutorizada,
   KpiUniversal,
   GraficoPadraoConfig,
 ];
@@ -40,4 +44,6 @@ export const TENANT_ENTITIES = [
   WhatsappGrupoMapa,
   Tenant,
   WhatsappGrupoRoteamento,
+  WhatsappAutorizado,
+  WhatsappTentativaNaoAutorizada,
 ];

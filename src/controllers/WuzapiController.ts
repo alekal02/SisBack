@@ -19,6 +19,32 @@ import {
   urlSemSegredoWebhook,
   webhookHmacDeveRecusar,
 } from '../services/wuzapiWebhookAuth';
+import { ehGestorGlobal } from '../middlewares/authMiddleware';
+import {
+  atualizarAutorizado,
+  autorizarTentativa,
+  criarAutorizado,
+  ErroWhatsappAutorizado,
+  listarAutorizadosPorContrato,
+  listarTentativasNaoAutorizadas,
+  removerAutorizado,
+} from '../services/whatsappAutorizadoService';
+
+function podeVerContrato(req: Request, contractId: string): boolean {
+  const usuario = req.usuario;
+  if (!usuario) return false;
+  if (ehGestorGlobal(usuario)) return true;
+  return !!usuario.contractId && usuario.contractId === contractId;
+}
+
+function responderErroWhatsapp(res: Response, error: unknown, fallback: string): void {
+  if (error instanceof ErroWhatsappAutorizado) {
+    res.status(error.status).json({ error: error.message });
+    return;
+  }
+  const message = error instanceof Error ? error.message : fallback;
+  res.status(500).json({ error: message || fallback });
+}
 
 function sessaoSemSegredo<T extends { webhook?: string; Webhook?: string }>(sessao: T): T {
   const copia = { ...sessao };
@@ -404,6 +430,128 @@ export class WuzapiController {
       res.json({ ok: true });
     } catch (error: any) {
       res.status(500).json({ error: error?.message || 'Erro ao excluir' });
+    }
+  }
+
+  /** GET /api/wuzapi/autorizados?contractId= */
+  async listarAutorizados(req: Request, res: Response): Promise<void> {
+    try {
+      const contractId = String(req.query.contractId || req.usuario?.contractId || '').trim();
+      if (!contractId) {
+        res.status(400).json({ error: 'Informe o contrato.' });
+        return;
+      }
+      if (!podeVerContrato(req, contractId)) {
+        res.status(403).json({ error: 'Sem acesso a este contrato.' });
+        return;
+      }
+      res.json(await listarAutorizadosPorContrato(contractId));
+    } catch (error: unknown) {
+      responderErroWhatsapp(res, error, 'Erro ao listar pessoas autorizadas');
+    }
+  }
+
+  /** POST /api/wuzapi/autorizados */
+  async criarAutorizado(req: Request, res: Response): Promise<void> {
+    try {
+      const contractId = String(req.body?.contractId || req.usuario?.contractId || '').trim();
+      if (!podeVerContrato(req, contractId)) {
+        res.status(403).json({ error: 'Sem acesso a este contrato.' });
+        return;
+      }
+      const criado = await criarAutorizado({ ...req.body, contractId });
+      res.status(201).json(criado);
+    } catch (error: unknown) {
+      responderErroWhatsapp(res, error, 'Erro ao autorizar a pessoa');
+    }
+  }
+
+  /** PUT /api/wuzapi/autorizados/:id */
+  async atualizarAutorizado(req: Request, res: Response): Promise<void> {
+    try {
+      const { getControlDataSource } = await import('../database/data-source');
+      const { WhatsappAutorizado } = await import('../entities/WhatsappAutorizado');
+      const row = await getControlDataSource().getRepository(WhatsappAutorizado).findOne({
+        where: { id: String(req.params.id) },
+      });
+      if (!row) {
+        res.status(404).json({ error: 'Pessoa não encontrada.' });
+        return;
+      }
+      if (!podeVerContrato(req, row.contractId)) {
+        res.status(403).json({ error: 'Sem acesso a este contrato.' });
+        return;
+      }
+      const contractIdPedido = String(req.body?.contractId || row.contractId);
+      if (!podeVerContrato(req, contractIdPedido)) {
+        res.status(403).json({ error: 'Sem acesso a este contrato.' });
+        return;
+      }
+      const atual = await atualizarAutorizado(row.id, req.body || {});
+      res.json(atual);
+    } catch (error: unknown) {
+      responderErroWhatsapp(res, error, 'Erro ao atualizar a pessoa');
+    }
+  }
+
+  /** DELETE /api/wuzapi/autorizados/:id */
+  async removerAutorizado(req: Request, res: Response): Promise<void> {
+    try {
+      const { getControlDataSource } = await import('../database/data-source');
+      const { WhatsappAutorizado } = await import('../entities/WhatsappAutorizado');
+      const row = await getControlDataSource().getRepository(WhatsappAutorizado).findOne({
+        where: { id: String(req.params.id) },
+      });
+      if (!row) {
+        res.status(404).json({ error: 'Pessoa não encontrada.' });
+        return;
+      }
+      if (!podeVerContrato(req, row.contractId)) {
+        res.status(403).json({ error: 'Sem acesso a este contrato.' });
+        return;
+      }
+      await removerAutorizado(row.id);
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      responderErroWhatsapp(res, error, 'Erro ao remover a pessoa');
+    }
+  }
+
+  /** GET /api/wuzapi/tentativas — só o gestor */
+  async listarTentativas(req: Request, res: Response): Promise<void> {
+    try {
+      if (!ehGestorGlobal(req.usuario)) {
+        res.status(403).json({ error: 'Somente o gestor vê as tentativas.' });
+        return;
+      }
+      res.json({ tentativas: await listarTentativasNaoAutorizadas() });
+    } catch (error: unknown) {
+      responderErroWhatsapp(res, error, 'Erro ao listar tentativas');
+    }
+  }
+
+  /** POST /api/wuzapi/tentativas/:id/autorizar */
+  async autorizarTentativa(req: Request, res: Response): Promise<void> {
+    try {
+      if (!ehGestorGlobal(req.usuario)) {
+        res.status(403).json({ error: 'Somente o gestor autoriza por aqui.' });
+        return;
+      }
+      const contractId = String(req.body?.contractId || '').trim();
+      if (!contractId) {
+        res.status(400).json({ error: 'Escolha o contrato.' });
+        return;
+      }
+      const salvo = await autorizarTentativa(String(req.params.id), {
+        contractId,
+        telefone: req.body?.telefone,
+        nome: req.body?.nome,
+        podeEnviarPlanilha: req.body?.podeEnviarPlanilha === true,
+        podePedirRelatorio: req.body?.podePedirRelatorio === true,
+      });
+      res.status(201).json(salvo);
+    } catch (error: unknown) {
+      responderErroWhatsapp(res, error, 'Erro ao autorizar a tentativa');
     }
   }
 }

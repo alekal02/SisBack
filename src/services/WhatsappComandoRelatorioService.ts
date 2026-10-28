@@ -105,6 +105,11 @@ export function sessaoComandoAtiva(grupoJid: string): boolean {
   return sessoes.has(grupoJid);
 }
 
+export function contratoDaSessaoComando(grupoJid: string): string | null {
+  limparSessoes();
+  return sessoes.get(grupoJid)?.contratoId || null;
+}
+
 function normalizarTexto(raw: string): string {
   return String(raw || '')
     .normalize('NFD')
@@ -142,7 +147,7 @@ function menuRelatorioTexto(qual: QualCiclo = 'atual'): string {
   return [
     '📊 *Relatórios Sistemma*',
     '',
-    `Os PDFs usam *somente os dados deste contrato* (grupo mapeado) — ${escopo}.`,
+    `Os PDFs usam *somente os dados deste contrato* — ${escopo}.`,
     '',
     'Escolha uma opção (responda com o número):',
     '',
@@ -955,17 +960,19 @@ export async function processarComandoTextoWhatsapp(opts: {
   grupoJid: string;
   texto: string;
   isFromMe?: boolean;
+  contextoContrato?: { servico: Servico; contrato: Contract | null };
 }): Promise<{ processado: boolean; motivo?: string }> {
   limparSessoes();
   const texto = opts.texto.trim();
   if (!texto) return { processado: false, motivo: 'Sem texto' };
 
-  // Ignora eco das próprias mensagens do bot (exceto se for teste humano no mesmo número com comando explícito)
   const norm = normalizarTexto(texto);
 
-  const resolvido = await resolverMapaGrupo(opts.grupoJid);
-  if (!resolvido) {
-    return { processado: false, motivo: 'Grupo não mapeado' };
+  const resolvido = opts.contextoContrato?.servico
+    ? { servico: opts.contextoContrato.servico, contrato: opts.contextoContrato.contrato }
+    : await resolverMapaGrupo(opts.grupoJid);
+  if (!resolvido?.servico) {
+    return { processado: false, motivo: opts.contextoContrato ? 'Contrato sem serviço' : 'Grupo não mapeado' };
   }
   if (!wuzapiService.isConfigured) {
     return { processado: false, motivo: 'WuzAPI não configurada' };

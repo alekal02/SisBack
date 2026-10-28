@@ -2,11 +2,11 @@ import { diretorioInboxWhatsapp } from './webhookCorpoStream';
 import fs from 'fs';
 import path from 'path';
 import AppDataSource, {
+  getControlDataSource,
   getCurrentTenantDb,
   isMultiTenant,
   runWithTenant,
 } from '../database/data-source';
-import { buscarRoteamentoGrupo } from './whatsappRoteamentoService';
 import { WhatsappGrupoMapa } from '../entities/WhatsappGrupoMapa';
 import { Servico } from '../entities/Servico';
 import { Contract } from '../entities/Contract';
@@ -25,6 +25,7 @@ import { marcarOrigemPlanilhaUpload } from './planilhaOriginalStorage';
 import { liberarNavegadorPdf } from './PdfGeneratorService';
 import wuzapiService from './WuzapiService';
 import {
+  contratoDaSessaoComando,
   extrairTextoMensagem,
   processarComandoTextoWhatsapp,
   sessaoComandoAtiva,
@@ -52,10 +53,29 @@ import {
   textoGrupoNaoConfigurado,
 } from './WhatsappMensagemLedger';
 import { liberarTrabalhoPesado, ocuparTrabalhoPesado } from './trabalhoPesado';
+import { registrarRecebimentoWhatsapp } from './whatsappEscopoGrupo';
+import { gravarEmArquivosStorage } from './planilhaOriginalStorage';
+import { bancoDoContrato } from './tenantDatabaseService';
 import {
-  decidirEscopoDaMensagem,
-  registrarRecebimentoWhatsapp,
-} from './whatsappEscopoGrupo';
+  gravarLidNasPessoas,
+  pessoasAtivasPorTelefone,
+  registrarTentativaNaoAutorizada,
+  telefoneDoLid,
+} from './whatsappAutorizadoService';
+import {
+  acaoSegueProcessamento,
+  consumirCotaRemetente,
+  decidirConversaPrivada,
+  extrairIdentidadePayload,
+  guardarPendencia,
+  limparPendencia,
+  mensagemDeGrupo,
+  obterPendencia,
+  textoEscolhaContrato,
+  TTL_PLANILHA_PENDENTE_MS,
+  type DecisaoConversaPrivada,
+  type IdentidadeRemetenteWhatsapp,
+} from './whatsappConversaPrivada';
 
 const EXT_PLANILHA = /\.(xlsx|xls|xlsm)$/i;
 const MIME_PLANILHA = /spreadsheet|excel|ms-excel|officedocument\.spreadsheetml|octet-stream/i;
@@ -130,13 +150,6 @@ export function normalizarPayloadWebhook(body: unknown): WuzapiWebhookPayload {
   }
 
   return raw as WuzapiWebhookPayload;
-}
-
-function normalizarGrupoJid(chat: string): string {
-  const raw = String(chat || '').trim();
-  if (!raw) return '';
-  if (raw.includes('@')) return raw;
-  return `${raw}@g.us`;
 }
 
 const BASE64_DISCO_A_PARTIR = 512 * 1024;
@@ -229,14 +242,16 @@ function enfileirarProcessamento<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function avisarGrupoWhatsapp(grupoJid: string, texto: string): Promise<void> {
-  if (!grupoJid.endsWith('@g.us') || !wuzapiService.isConfigured) return;
+async function avisarChatWhatsapp(jid: string, texto: string): Promise<void> {
+  if (!jid || jid.endsWith('@g.us') || !wuzapiService.isConfigured) return;
   try {
-    await wuzapiService.enviarTexto(grupoJid, texto);
+    await wuzapiService.enviarTexto(jid, texto);
   } catch (err: any) {
-    console.error('[WhatsappPipeline] Falha ao avisar o grupo:', err?.message || err);
+    console.error('[WhatsappPipeline] Falha ao responder no WhatsApp:', err?.message || err);
   }
 }
+
+const avisarGrupoWhatsapp = avisarChatWhatsapp;
 
 function bytesToBase64(value: unknown): string | null {
   if (!value) return null;
@@ -592,8 +607,140 @@ async function atualizarPadraoServicoAposImport(
   }
 }
 
+function parecePlanilhaPayload(payload: WuzapiWebhookPayload): boolean {
+  const { fileName, mimetype, doc } = extrairDocumento(payload);
+  const temDocumento = !!(doc && Object.keys(doc).length > 0) || !!payload.base64 || !!payload.base64Arquivo;
+  if (!temDocumento) return false;
+  if (fileName && !EXT_PLANILHA.test(fileName) && !MIME_PLANILHA.test(mimetype)) return false;
+  return isPlanilha(fileName, mimetype)
+    || EXT_PLANILHA.test(fileName || '')
+    || MIME_PLANILHA.test(mimetype)
+    || !!payload.base64
+    || !!payload.base64Arquivo;
+}
+
+async function noContrato<T>(contractId: string, fn: () => Promise<T>): Promise<T> {
+  if (!isMultiTenant()) return fn();
+  const db = await bancoDoContrato(contractId);
+  if (!db) throw new Error('Contrato sem banco provisionado');
+  return runWithTenant(db, fn);
+}
+
+async function contextoDoContrato(contractId: string): Promise<{ servico: Servico; contrato: Contract | null } | null> {
+  const contrato = await AppDataSource.getRepository(Contract).findOne({ where: { id: contractId } });
+  let servico = await AppDataSource.getRepository(Servico).findOne({
+    where: { contract_id: contractId, tipo: TipoServico.COLETA_CAMINHAO },
+  });
+  if (!servico) {
+    servico = await AppDataSource.getRepository(Servico).findOne({ where: { contract_id: contractId } });
+  }
+  if (!servico) return null;
+  return { servico, contrato };
+}
+
+function bufferDeBytea(valor: unknown): Buffer | null {
+  if (!valor) return null;
+  if (Buffer.isBuffer(valor)) return valor;
+  if (typeof valor === 'string') {
+    const hex = valor.replace(/^\\x/, '');
+    if (/^[0-9a-fA-F]+$/.test(hex) && hex.length % 2 === 0) return Buffer.from(hex, 'hex');
+  }
+  return null;
+}
+
+async function lerArquivoPendente(caminho: string): Promise<Buffer | null> {
+  const rows = await getControlDataSource().query(
+    'SELECT conteudo FROM arquivos_storage WHERE caminho = $1',
+    [caminho],
+  ) as Array<{ conteudo?: unknown }>;
+  return bufferDeBytea(rows?.[0]?.conteudo);
+}
+
+async function apagarArquivoPendente(caminho: string | undefined): Promise<void> {
+  if (!caminho) return;
+  try {
+    await getControlDataSource().query('DELETE FROM arquivos_storage WHERE caminho = $1', [caminho]);
+  } catch {
+    /* a planilha pendente já pode ter saído */
+  }
+}
+
+function chavesRemetente(ident: IdentidadeRemetenteWhatsapp, telefoneResolvido?: string | null): string[] {
+  return [...new Set(
+    [telefoneResolvido || '', ident.telefone || '', ident.lid || '', ident.chat || '', ident.chave]
+      .map((c) => String(c || '').trim())
+      .filter(Boolean),
+  )];
+}
+
+function pendenciaDoRemetente(ident: IdentidadeRemetenteWhatsapp, telefoneResolvido?: string | null) {
+  for (const chave of chavesRemetente(ident, telefoneResolvido)) {
+    const pendencia = obterPendencia(chave);
+    if (pendencia) return pendencia;
+  }
+  return null;
+}
+
+function guardarPendenciaRemetente(
+  ident: IdentidadeRemetenteWhatsapp,
+  telefoneResolvido: string | null,
+  pendencia: Parameters<typeof guardarPendencia>[1],
+): void {
+  for (const chave of chavesRemetente(ident, telefoneResolvido)) guardarPendencia(chave, pendencia);
+}
+
+function limparPendenciaRemetente(ident: IdentidadeRemetenteWhatsapp, telefoneResolvido?: string | null): void {
+  for (const chave of chavesRemetente(ident, telefoneResolvido)) limparPendencia(chave);
+}
+
+async function montarDecisaoPrivada(
+  payload: WuzapiWebhookPayload,
+  ident: IdentidadeRemetenteWhatsapp,
+): Promise<{ decisao: DecisaoConversaPrivada; telefone: string | null }> {
+  let telefone = ident.telefone;
+  if (!telefone && ident.lid) {
+    try {
+      telefone = await telefoneDoLid(ident.lid);
+    } catch {
+      telefone = null;
+    }
+    if (!telefone && wuzapiService.isConfigured) {
+      try {
+        telefone = await wuzapiService.resolverTelefonePorLid(ident.lid);
+      } catch {
+        telefone = null;
+      }
+    }
+  }
+  if (telefone && ident.lid) {
+    try {
+      await gravarLidNasPessoas(telefone, ident.lid);
+    } catch (err: any) {
+      console.warn('[WhatsappPipeline] Não gravei o LID:', err?.message || err);
+    }
+  }
+  const pessoas = telefone ? await pessoasAtivasPorTelefone(telefone) : [];
+  const texto = extrairTextoMensagem(payload);
+  const parecePlanilha = parecePlanilhaPayload(payload);
+  const chat = ident.chat || String(payload.event?.Info?.Chat || '');
+  return {
+    telefone,
+    decisao: decidirConversaPrivada({
+      grupo: false,
+      parecePlanilha,
+      texto,
+      textoMerece: sessaoComandoAtiva(chat) || textoMereceProcessamento(texto),
+      pessoas,
+      pendencia: pendenciaDoRemetente(ident, telefone),
+      agora: Date.now(),
+      contratoSessao: contratoDaSessaoComando(chat),
+    }),
+  };
+}
+
 /**
- * Processa mensagem de grupo com planilha: importa + gera PDF do dia + responde no grupo.
+ * Conversa privada com pessoa autorizada por contrato.
+ * Planilha segue a classificação atual; relatório usa os comandos já existentes.
  */
 export class WhatsappPlanilhaPipelineService {
   /**
@@ -610,41 +757,44 @@ export class WhatsappPlanilhaPipelineService {
       return { status: 200, body: { sucesso: true, recebido: true, ignorado: true }, continuar: null };
     }
     const info = payload.event?.Info;
-    const chat = String(info?.Chat || '');
-    const isGroup = info?.IsGroup === true || chat.endsWith('@g.us');
-    if (!info || !isGroup) {
-      return {
-        status: 200,
-        body: { sucesso: true, recebido: true, ignorado: 'conversa_privada' },
-        continuar: null,
-      };
+    if (!info) {
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'sem_info' }, continuar: null };
+    }
+    const ident = extrairIdentidadePayload(payload);
+    const chat = ident.chat || String(info.Chat || '');
+    if (mensagemDeGrupo({ isGroup: info.IsGroup === true, chat, sender: ident.sender })) {
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'grupo' }, continuar: null };
+    }
+    if (info.IsFromMe === true) {
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'propria' }, continuar: null };
+    }
+    if (!consumirCotaRemetente(ident.chave)) {
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'limite' }, continuar: null };
     }
 
-    const grupoJid = normalizarGrupoJid(chat);
-    const escopo = await decidirEscopoDaMensagem({ isGroup: true, grupoJid });
-    if (escopo !== 'autorizado') {
-      return {
-        status: 200,
-        body: { sucesso: true, recebido: true, ignorado: escopo },
-        continuar: null,
-      };
-    }
-
-    const { fileName, mimetype } = extrairDocumento(payload);
-    const parecePlanilha = isPlanilha(fileName, mimetype) || EXT_PLANILHA.test(fileName || '');
     const textoMsg = extrairTextoMensagem(payload);
-    const pedidoRelatorio = sessaoComandoAtiva(grupoJid) || textoMereceProcessamento(textoMsg);
-    if (!parecePlanilha && !pedidoRelatorio) {
-      return {
-        status: 200,
-        body: { sucesso: true, recebido: true, ignorado: 'conversa' },
-        continuar: null,
-      };
+    const parecePlanilha = parecePlanilhaPayload(payload);
+    const pendencia = pendenciaDoRemetente(ident);
+    const pedido = parecePlanilha
+      || !!pendencia
+      || sessaoComandoAtiva(chat)
+      || textoMereceProcessamento(textoMsg);
+    if (!pedido) {
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'conversa' }, continuar: null };
     }
 
-    if (isMultiTenant() && !getCurrentTenantDb()) {
-      const rota = await buscarRoteamentoGrupo(grupoJid);
-      if (rota) return runWithTenant(rota.tenantDb, () => this.aceitarWebhook(rawPayload));
+    const montada = await montarDecisaoPrivada(payload, ident);
+    const decisao = montada.decisao;
+    if (decisao.acao === 'silencio') {
+      await registrarTentativaNaoAutorizada({
+        telefone: ident.telefone || ident.lid?.replace(/\D/g, '') || 'sem-telefone',
+        nomePerfil: ident.nomePerfil,
+        tipo: decisao.tipo,
+      });
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'nao_autorizado' }, continuar: null };
+    }
+    if (!acaoSegueProcessamento(decisao.acao)) {
+      return { status: 200, body: { sucesso: true, recebido: true, ignorado: decisao.acao }, continuar: null };
     }
 
     const msgId = String(info.ID || '').trim();
@@ -654,23 +804,18 @@ export class WhatsappPlanilhaPipelineService {
     if (msgId) {
       const reserva = await reservarMensagemWhatsapp({
         messageId: msgId,
-        grupoJid,
+        grupoJid: chat,
         payload: payloadParaFila,
       });
       if (reserva.acao === 'ignorar') {
-        return {
-          status: 200,
-          body: { sucesso: true, recebido: true, duplicata: true },
-          continuar: null,
-        };
+        return { status: 200, body: { sucesso: true, recebido: true, duplicata: true }, continuar: null };
       }
     }
 
-    const tenantDb = getCurrentTenantDb();
     return {
       status: 200,
       body: { sucesso: true, recebido: true },
-      continuar: () => this.processarEmFila(payloadParaFila, tenantDb),
+      continuar: () => this.processarEmFila(payloadParaFila, null),
     };
   }
 
@@ -708,30 +853,14 @@ export class WhatsappPlanilhaPipelineService {
       return { processado: false, motivo: 'Payload sem Info' };
     }
 
-    const chat = String(info.Chat || '');
-    const isGroup = info.IsGroup === true || chat.endsWith('@g.us');
-    if (!isGroup) {
-      return { processado: false, motivo: 'Conversa privada ignorada' };
-    }
-
-    const grupoJid = normalizarGrupoJid(chat);
-    const escopo = await decidirEscopoDaMensagem({ isGroup: true, grupoJid });
-    if (escopo !== 'autorizado') {
-      return { processado: false, motivo: 'Grupo não autorizado' };
-    }
-    if (isMultiTenant() && !getCurrentTenantDb()) {
-      const rota = await buscarRoteamentoGrupo(grupoJid);
-      if (rota) {
-        return runWithTenant(rota.tenantDb, () => this.processarWebhook(rawPayload, opts));
-      }
-    }
-
+    const ident = extrairIdentidadePayload(payload);
+    const chat = ident.chat || String(info.Chat || '');
     const msgId = String(info.ID || '').trim();
     let reservou = false;
     if (msgId && !opts?.reservaPronta) {
       const reserva = await reservarMensagemWhatsapp({
         messageId: msgId,
-        grupoJid,
+        grupoJid: chat,
         payload: rawPayload,
       });
       if (reserva.acao === 'ignorar') {
@@ -742,9 +871,13 @@ export class WhatsappPlanilhaPipelineService {
       reservou = true;
     }
 
+    if (mensagemDeGrupo({ isGroup: info.IsGroup === true, chat, sender: ident.sender })) {
+      return this.encerrarMensagem(msgId, reservou, chat, { processado: false, motivo: 'Grupo ignorado' });
+    }
+
     try {
-      const resultado = await this.processarGrupoReservado(payload, grupoJid, info);
-      const encerrado = await this.encerrarMensagem(msgId, reservou, grupoJid, resultado);
+      const resultado = await this.executarConversaPrivada(payload, ident, chat);
+      const encerrado = await this.encerrarMensagem(msgId, reservou, chat, resultado);
       if (encerrado.processado) await apagarBase64Arquivo(payload);
       return encerrado;
     } catch (err: any) {
@@ -752,9 +885,167 @@ export class WhatsappPlanilhaPipelineService {
       if (msgId && reservou) {
         await marcarFalhaMensagemWhatsapp(msgId, detalhe, 'erro_processamento');
       }
-      await avisarGrupoWhatsapp(grupoJid, textoFalhaImportacao(detalhe));
+      await avisarChatWhatsapp(chat, textoFalhaImportacao(detalhe));
       throw err;
     }
+  }
+
+  private async executarConversaPrivada(
+    payload: WuzapiWebhookPayload,
+    ident: IdentidadeRemetenteWhatsapp,
+    chat: string,
+  ): Promise<{ processado: boolean; motivo?: string; resultado?: Record<string, unknown> }> {
+    const montada = await montarDecisaoPrivada(payload, ident);
+    const decisao = montada.decisao;
+    const telefone = montada.telefone;
+
+    if (decisao.acao === 'silencio') {
+      await registrarTentativaNaoAutorizada({
+        telefone: ident.telefone || ident.lid?.replace(/\D/g, '') || 'sem-telefone',
+        nomePerfil: ident.nomePerfil,
+        tipo: decisao.tipo,
+      });
+      return { processado: true, motivo: 'nao-autorizado' };
+    }
+    if (decisao.acao === 'planilha_expirada') {
+      const pendente = pendenciaDoRemetente(ident, telefone);
+      limparPendenciaRemetente(ident, telefone);
+      await apagarArquivoPendente(pendente?.caminho);
+      await avisarChatWhatsapp(chat, 'A planilha expirou. Envie de novo.');
+      return { processado: true, motivo: 'planilha-expirada' };
+    }
+    if (decisao.acao === 'indice_invalido') {
+      await avisarChatWhatsapp(chat, `Responda com um número da lista (1 a ${decisao.max}).`);
+      return { processado: true, motivo: 'indice-invalido' };
+    }
+    if (decisao.acao === 'contrato_nao_autorizado') {
+      await avisarChatWhatsapp(chat, 'Você não está autorizado a pedir relatório desse contrato.');
+      return { processado: true, motivo: 'contrato-nao-autorizado' };
+    }
+    if (decisao.acao === 'perguntar_planilha') {
+      const anterior = pendenciaDoRemetente(ident, telefone);
+      if (anterior?.caminho) await apagarArquivoPendente(anterior.caminho);
+      const { doc } = extrairDocumento(payload);
+      const { buffer, nomeArquivo } = await obterBufferPlanilha(payload, doc);
+      const caminho = `whatsapp/pendente/${(telefone || ident.chave).replace(/[^\w.-]/g, '')}-${Date.now()}.xlsx`;
+      await gravarEmArquivosStorage(
+        caminho,
+        buffer,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        (sql, params) => getControlDataSource().query(sql, params),
+      );
+      guardarPendenciaRemetente(ident, telefone, {
+        tipo: 'planilha',
+        expiraEm: Date.now() + TTL_PLANILHA_PENDENTE_MS,
+        contratos: decisao.contratos,
+        caminho,
+        nomeArquivo,
+      });
+      await avisarChatWhatsapp(chat, textoEscolhaContrato('Para qual contrato é esta planilha?', decisao.contratos));
+      return { processado: true, motivo: 'aguardando-contrato-planilha' };
+    }
+    if (decisao.acao === 'perguntar_relatorio') {
+      guardarPendenciaRemetente(ident, telefone, {
+        tipo: 'relatorio',
+        expiraEm: Date.now() + TTL_PLANILHA_PENDENTE_MS,
+        contratos: decisao.contratos,
+        texto: decisao.texto,
+      });
+      await avisarChatWhatsapp(chat, textoEscolhaContrato('Para qual contrato é este relatório?', decisao.contratos));
+      return { processado: true, motivo: 'aguardando-contrato-relatorio' };
+    }
+
+    let contractId = '';
+    let textoRelatorio = extrairTextoMensagem(payload);
+    if (decisao.acao === 'importar') contractId = decisao.contractId;
+    if (decisao.acao === 'relatorio') {
+      contractId = decisao.contractId;
+      textoRelatorio = decisao.texto;
+    }
+    if (decisao.acao === 'usar_planilha_pendente') contractId = decisao.contractId;
+    if (decisao.acao === 'usar_relatorio_pendente') {
+      contractId = decisao.contractId;
+      textoRelatorio = decisao.texto;
+    }
+    if (!contractId) return { processado: false, motivo: 'Nada a fazer nesta conversa' };
+
+    if (decisao.acao === 'usar_planilha_pendente' || decisao.acao === 'importar') {
+      let buffer: Buffer;
+      let nomeArquivo: string;
+      if (decisao.acao === 'usar_planilha_pendente') {
+        const pendente = pendenciaDoRemetente(ident, telefone);
+        limparPendenciaRemetente(ident, telefone);
+        const arquivo = pendente?.caminho ? await lerArquivoPendente(pendente.caminho) : null;
+        await apagarArquivoPendente(pendente?.caminho);
+        if (!arquivo) {
+          await avisarChatWhatsapp(chat, 'A planilha expirou. Envie de novo.');
+          return { processado: true, motivo: 'planilha-expirada' };
+        }
+        buffer = arquivo;
+        nomeArquivo = pendente?.nomeArquivo || 'planilha.xlsx';
+      } else {
+        const { doc } = extrairDocumento(payload);
+        const baixado = await obterBufferPlanilha(payload, doc);
+        buffer = baixado.buffer;
+        nomeArquivo = baixado.nomeArquivo;
+      }
+      return noContrato(contractId, () => this.importarNoContrato(contractId, buffer, nomeArquivo, chat));
+    }
+
+    limparPendenciaRemetente(ident, telefone);
+    return noContrato(contractId, () => this.relatorioNoContrato(contractId, chat, textoRelatorio));
+  }
+
+  private async importarNoContrato(
+    contractId: string,
+    buffer: Buffer,
+    nomeArquivo: string,
+    chat: string,
+  ): Promise<{ processado: boolean; motivo?: string; resultado?: Record<string, unknown> }> {
+    const ctx = await contextoDoContrato(contractId);
+    if (!ctx) return { processado: false, motivo: 'Contrato sem serviço para importar a planilha' };
+    if (!wuzapiService.isConfigured) {
+      return { processado: false, motivo: 'WuzAPI não configurada (WUZAPI_URL/WUZAPI_TOKEN)' };
+    }
+    const nome = EXT_PLANILHA.test(nomeArquivo) ? nomeArquivo : `${nomeArquivo.replace(/\.[^.]+$/, '') || 'planilha'}.xlsx`;
+    await avisarChatWhatsapp(chat, `Recebi a planilha *${nome}*. Estou importando. Pode levar alguns minutos.`);
+    const importResult = await importarPlanilha(buffer, nome, ctx.servico, 'atualizar_data');
+    const idsUpload = importResult.planilhaUploadIds?.length
+      ? importResult.planilhaUploadIds
+      : (importResult.planilhaUploadId ? [importResult.planilhaUploadId] : []);
+    for (const id of idsUpload) await marcarOrigemPlanilhaUpload(id, 'whatsapp');
+    try {
+      await gravarAlertasArquivoEm(idsUpload, buffer);
+    } catch (err: any) {
+      console.warn('[WhatsappPipeline] Alertas da conferência:', err?.message || err);
+    }
+    return this.posImport(ctx.servico, chat, nome, importResult);
+  }
+
+  private async relatorioNoContrato(
+    contractId: string,
+    chat: string,
+    texto: string,
+  ): Promise<{ processado: boolean; motivo?: string; resultado?: Record<string, unknown> }> {
+    const ctx = await contextoDoContrato(contractId);
+    if (!ctx) return { processado: false, motivo: 'Contrato sem serviço' };
+    if (!wuzapiService.isConfigured) {
+      return { processado: false, motivo: 'WuzAPI não configurada (WUZAPI_URL/WUZAPI_TOKEN)' };
+    }
+    const cmd = await processarComandoTextoWhatsapp({
+      grupoJid: chat,
+      texto,
+      contextoContrato: ctx,
+    });
+    if (cmd.processado) {
+      registrarRecebimentoWhatsapp({
+        grupoJid: chat,
+        nomeGrupo: null,
+        tipo: 'relatorio',
+        resumo: texto.slice(0, 80),
+      });
+    }
+    return { processado: cmd.processado, motivo: cmd.motivo || 'comando-texto', resultado: { comando: true } };
   }
 
   private async encerrarMensagem(
@@ -962,7 +1253,7 @@ export class WhatsappPlanilhaPipelineService {
         rodape,
       ].filter(Boolean).join('\n');
     try {
-      await wuzapiService.enviarTexto(grupoJid, resumo);
+      if (!grupoJid.endsWith('@g.us')) await wuzapiService.enviarTexto(grupoJid, resumo);
     } catch { /* ignore */ }
 
     return {
@@ -1020,7 +1311,7 @@ export async function recuperarMensagensWhatsappPendentes(): Promise<number> {
         'Interrompida para o servidor não reiniciar de novo',
         MOTIVO_INTERROMPIDO,
       );
-      if (item.grupoJid && wuzapiService.isConfigured) {
+      if (item.grupoJid && !item.grupoJid.endsWith('@g.us') && wuzapiService.isConfigured) {
         try {
           await wuzapiService.enviarTexto(
             item.grupoJid,

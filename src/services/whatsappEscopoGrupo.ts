@@ -22,16 +22,15 @@ function chaveCache(): string {
   return getCurrentTenantDb() || (isMultiTenant() ? '__control__' : '__unico__');
 }
 
-/** Conversa privada e grupo não mapeado são descartados antes de gravar ou responder. */
+/** Grupo (@g.us) é sempre ignorado. A conversa privada segue a autorização por contrato. */
 export function decidirEscopoWhatsapp(opts: {
   isGroup: boolean;
   grupoJid: string;
-  autorizados: ReadonlySet<string>;
+  autorizados?: ReadonlySet<string>;
 }): DecisaoEscopoWhatsapp {
   const jid = String(opts.grupoJid || '').trim();
-  if (!opts.isGroup || !jid.endsWith('@g.us')) return 'privado';
-  if (!opts.autorizados.has(jid)) return 'grupo_fora';
-  return 'autorizado';
+  if (opts.isGroup || jid.endsWith('@g.us')) return 'grupo_fora';
+  return 'privado';
 }
 
 export function invalidarGruposAutorizados(): void {
@@ -80,7 +79,5 @@ export async function decidirEscopoDaMensagem(opts: {
   isGroup: boolean;
   grupoJid: string;
 }): Promise<DecisaoEscopoWhatsapp> {
-  if (!opts.isGroup || !String(opts.grupoJid || '').endsWith('@g.us')) return 'privado';
-  const autorizados = await jidsGruposAutorizados();
-  return decidirEscopoWhatsapp({ ...opts, autorizados });
+  return decidirEscopoWhatsapp(opts);
 }

@@ -21,11 +21,11 @@ describe('escopo do WhatsApp', () => {
     }), 'grupo_fora');
   });
 
-  it('aceita só o grupo mapeado', () => {
+  it('ignora grupo mesmo quando ele estava mapeado', () => {
     assert.equal(decidirEscopoWhatsapp({
       isGroup: true,
       grupoJid: '120363@g.us',
       autorizados,
-    }), 'autorizado');
+    }), 'grupo_fora');
   });
 });

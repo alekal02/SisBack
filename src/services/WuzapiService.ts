@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { urlSemSegredoWebhook } from './wuzapiWebhookAuth';
+import { telefoneDeRespostaLid } from './whatsappConversaPrivada';
 
 export interface WuzapiSessionStatus {
   connected?: boolean;
@@ -379,6 +380,26 @@ export class WuzapiService {
     }
 
     return { message: 'WhatsApp desconectado. Escaneie o QR novamente para reconectar.' };
+  }
+
+  /**
+   * Quando o webhook manda LID (@lid) sem SenderAlt/sender_pn, pergunta o telefone à WuzAPI.
+   * Tenta os caminhos conhecidos e desiste sem derrubar o webhook.
+   */
+  async resolverTelefonePorLid(lid: string): Promise<string | null> {
+    if (!this.isConfigured || !lid) return null;
+    const corpo = { LID: lid, lid, Phone: lid };
+    const rotas = ['/user/pn', '/user/lid', '/user/info'];
+    for (const rota of rotas) {
+      try {
+        const { data } = await this.client.post(rota, corpo);
+        const telefone = telefoneDeRespostaLid(data);
+        if (telefone) return telefone;
+      } catch {
+        /* o build da WuzAPI pode não ter esta rota */
+      }
+    }
+    return null;
   }
 
   async listarGruposWhatsApp(): Promise<Array<{ jid: string; nome: string; participantes: number }>> {
