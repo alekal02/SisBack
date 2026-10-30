@@ -88,9 +88,91 @@ export function avisoGrupoNaoConfiguradoLigado(): boolean {
   return String(process.env.WUZAPI_AVISAR_GRUPO || '').trim() === 'true';
 }
 
+function diaCurto(iso: string): string {
+  const [ano, mes, dia] = String(iso || '').split('-');
+  if (!ano || !mes || !dia) return iso;
+  return `${dia}/${mes}`;
+}
+
+/** Uma linha no WhatsApp. O detalhe (lidas, totais, alertas) fica no painel. */
+export function textoPlanilhaImportada(opts: {
+  servico: string;
+  contrato: string;
+  inicio?: string | null;
+  fim?: string | null;
+  linhasFora?: number;
+}): string {
+  const inicio = String(opts.inicio || '').slice(0, 10);
+  const fim = String(opts.fim || '').slice(0, 10);
+  let periodo = '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(inicio) && /^\d{4}-\d{2}-\d{2}$/.test(fim)) {
+    const mesmoAno = inicio.slice(0, 4) === fim.slice(0, 4);
+    const ini = mesmoAno ? diaCurto(inicio) : `${diaCurto(inicio)}/${inicio.slice(0, 4)}`;
+    const end = mesmoAno ? diaCurto(fim) : `${diaCurto(fim)}/${fim.slice(0, 4)}`;
+    periodo = ini === end ? ini : `${ini} a ${end}`;
+  }
+  const miolo = [opts.servico, opts.contrato, periodo].filter((p) => String(p || '').trim()).join(' · ');
+  const cabeca = miolo ? `✅ Planilha importada — ${miolo}` : '✅ Planilha importada';
+  const fora = Number(opts.linhasFora) || 0;
+  if (fora <= 0) return cabeca;
+  const palavra = fora === 1 ? 'linha não entrou' : 'linhas não entraram';
+  return `${cabeca}\n⚠️ ${fora} ${palavra}. Veja os detalhes no painel.`;
+}
+
+const FRASES_FALHA_IMPORTACAO: Array<{ teste: RegExp; frase: string }> = [
+  {
+    teste: /ciclo fechado|ciclo(?:\(s\))?s?\s+j[aá] fechado/i,
+    frase: 'o período da planilha está em um ciclo fechado.',
+  },
+  {
+    teste: /formato de planilha não reconhecido|não reconhec/i,
+    frase: 'não reconheci o formato da planilha.',
+  },
+  {
+    teste: /planilha vazia|sem dados na primeira aba/i,
+    frase: 'a planilha está vazia.',
+  },
+  {
+    teste: /nenhuma aba de coleta/i,
+    frase: 'não achei a aba de coleta nesta planilha.',
+  },
+  {
+    teste: /nenhuma linha/i,
+    frase: 'não encontrei linhas válidas na planilha.',
+  },
+  {
+    teste: /serviço não encontrado|servico nao encontrado|sem contrato|sem banco/i,
+    frase: 'este contrato não está pronto para receber a planilha.',
+  },
+  {
+    teste: /download|base64|documento retornou vazio|webhook/i,
+    frase: 'não consegui baixar o arquivo.',
+  },
+];
+
+function detalheTecnico(msg: string): boolean {
+  if (!msg || msg.length < 12) return true;
+  if (/[{}[\]<>]| at |\bnode_modules\b|SQL|null value|ECONN|stack|Error:|_[a-z]{2,}_|\btoken\b/i.test(msg)) {
+    return true;
+  }
+  return msg.split(/\s+/).length < 4;
+}
+
 export function textoFalhaImportacao(detalhe: string): string {
-  const msg = String(detalhe || 'erro desconhecido').replace(/\s+/g, ' ').slice(0, 400);
-  return `❌ Não foi possível importar a planilha: ${msg}`;
+  const bruto = String(detalhe || '').replace(/\s+/g, ' ').trim();
+  for (const item of FRASES_FALHA_IMPORTACAO) {
+    if (item.teste.test(bruto)) return `❌ Não consegui importar: ${item.frase}`;
+  }
+  if (detalheTecnico(bruto)) {
+    return '❌ Não consegui importar: não deu para ler esta planilha.';
+  }
+  let frase = bruto.replace(/^[.!\s]+/, '');
+  const corte = frase.search(/[.!?](\s|$)/);
+  if (corte >= 0) frase = frase.slice(0, corte + 1);
+  frase = frase.slice(0, 180).trim();
+  if (!/[.!?]$/.test(frase)) frase = `${frase}.`;
+  frase = frase.charAt(0).toLowerCase() + frase.slice(1);
+  return `❌ Não consegui importar: ${frase}`;
 }
 
 export function codigoFalhaMensagem(motivo?: string): string | null {

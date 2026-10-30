@@ -112,11 +112,7 @@ export async function apagarDatasDeUploadsAbertos(
 
   const { bloqueadas } = await verificarDatasEmCicloFechado(servicoId, datasValidas);
   const bloqueadasSet = new Set(bloqueadas);
-  let datas = datasValidas.filter((d) => !bloqueadasSet.has(d));
-  datas = restringirDatasAoCicloDaDataMaisRecente(
-    datas,
-    await obterDiaInicioCiclo(servicoId),
-  ).datas;
+  const datas = datasValidas.filter((d) => !bloqueadasSet.has(d));
   if (datas.length === 0) return [];
 
   const uploadIds = await obterUploadIdsModificaveis(servicoId, manager);
@@ -253,8 +249,29 @@ export function filtrarDatasAoPeriodo(datas: string[], inicio: string, fim: stri
 }
 
 /**
- * Ciclo da planilha nova = o da data mais recente. Datas de outro ciclo
- * (ex.: mês anterior ainda no Excel) não entram na importação e não são apagadas.
+ * Datas de ciclo fechado ficam de fora. Datas de outro ciclo aberto entram:
+ * o arquivo não perde dia válido só porque a data mais recente caiu no ciclo seguinte.
+ * `cicloAlvo` continua sendo o da data mais recente (referência do upload).
+ */
+export function decidirDatasDaPlanilha(
+  datasIso: string[],
+  bloqueadasFechado: string[],
+  diaInicioCiclo: number,
+): {
+  datas: string[];
+  cicloAlvo: PeriodoCicloContrato | null;
+} {
+  const bloqueadas = new Set(bloqueadasFechado);
+  const datas = [...new Set(
+    datasIso.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !bloqueadas.has(d)),
+  )].sort();
+  const cicloAlvo = restringirDatasAoCicloDaDataMaisRecente(datas, diaInicioCiclo).ciclo;
+  return { datas, cicloAlvo };
+}
+
+/**
+ * Ciclo da planilha nova = o da data mais recente. Serve de referência do upload.
+ * A importação em si aceita os outros ciclos, desde que não estejam fechados.
  */
 export async function resolverCicloAlvoDaPlanilha(
   servicoId: string,
@@ -285,19 +302,11 @@ export async function prepararDatasImportacaoCiclo(
   }
 
   const diaInicio = await obterDiaInicioCiclo(servicoId);
-  const restrito = restringirDatasAoCicloDaDataMaisRecente(datas, diaInicio);
-  const ignoradasOutroCiclo = restrito.ignoradas;
-  datas = restrito.datas;
-  const cicloAlvo = restrito.ciclo;
-  if (ignoradasOutroCiclo.length > 0 && cicloAlvo) {
-    avisos.push(
-      `${ignoradasOutroCiclo.length} data(s) de outro ciclo foram ignoradas `
-      + `(${ignoradasOutroCiclo[0]} a ${ignoradasOutroCiclo[ignoradasOutroCiclo.length - 1]}). `
-      + `Só o ciclo ${cicloAlvo.label} (${cicloAlvo.dataInicio} a ${cicloAlvo.dataFim}) é substituído.`,
-    );
-  }
+  const decididas = decidirDatasDaPlanilha(datas, bloqueadas, diaInicio);
+  datas = decididas.datas;
+  const cicloAlvo = decididas.cicloAlvo;
 
-  return { datas, cicloAlvo, avisos, bloqueadasFechado: bloqueadas, ignoradasOutroCiclo };
+  return { datas, cicloAlvo, avisos, bloqueadasFechado: bloqueadas, ignoradasOutroCiclo: [] };
 }
 
 export async function aplicarReferenciaCicloNoUpload(

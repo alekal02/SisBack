@@ -19,6 +19,7 @@ import {
   limparPendenciasWhatsapp,
   mensagemDeGrupo,
   telefoneDeRespostaLid,
+  textoEscolhaContrato,
   textoPlanilhaOutroContrato,
   textoPlanilhaRecebida,
   textoRelatorioContratoDia,
@@ -400,6 +401,13 @@ describe('WhatsApp privado — contrato lido na planilha', () => {
       'Planilha recebida para Aparecida de Goiânia. Se não for esse, responda CANCELAR em até 10 minutos.',
     );
     assert.equal(textoRelatorioContratoDia('Aparecida de Goiânia', '16/09/2026'), 'Relatório de Aparecida de Goiânia, dia 16/09/2026');
+    assert.equal(
+      textoEscolhaContrato('Para qual contrato é este relatório?', [
+        { nome: 'Aparecida de Goiânia' },
+        { nome: 'Unaí' },
+      ]),
+      'Qual contrato?\n1 Aparecida de Goiânia · 2 Unaí',
+    );
 
     const agora = 1_000_000;
     const cancelamento: CancelamentoImportacaoWhatsapp = {

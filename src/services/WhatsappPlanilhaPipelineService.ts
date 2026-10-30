@@ -39,7 +39,6 @@ import {
   conferenciaDoUpload,
   gravarAlertasArquivoEm,
   idsDeUploads,
-  mensagemWhatsappDeConferencias,
 } from './conferenciaImportacaoService';
 import {
   codigoFalhaMensagem,
@@ -50,6 +49,7 @@ import {
   MOTIVO_INTERROMPIDO,
   reservarMensagemWhatsapp,
   textoFalhaImportacao,
+  textoPlanilhaImportada,
   avisoGrupoNaoConfiguradoLigado,
   respostaAutomaticaNaoAutorizadoLigada,
   textoGrupoNaoConfigurado,
@@ -1034,7 +1034,7 @@ export class WhatsappPlanilhaPipelineService {
       return { processado: true, motivo: 'planilha-expirada' };
     }
     if (decisao.acao === 'indice_invalido') {
-      await avisarChatWhatsapp(chat, `Responda com um número da lista (1 a ${decisao.max}).`);
+      await avisarChatWhatsapp(chat, 'Responda com o número da lista.');
       return { processado: true, motivo: 'indice-invalido' };
     }
     if (decisao.acao === 'contrato_nao_autorizado') {
@@ -1180,9 +1180,6 @@ export class WhatsappPlanilhaPipelineService {
     }
     const nome = EXT_PLANILHA.test(nomeArquivo) ? nomeArquivo : `${nomeArquivo.replace(/\.[^.]+$/, '') || 'planilha'}.xlsx`;
     const nomeContrato = ctx.contrato?.numeroContrato || opts?.nomeContrato || 'contrato';
-    if (!opts?.detectado) {
-      await avisarChatWhatsapp(chat, `Recebi a planilha *${nome}*. Estou importando. Pode levar alguns minutos.`);
-    }
     const importResult = await importarPlanilha(buffer, nome, ctx.servico, 'atualizar_data');
     const idsUpload = importResult.planilhaUploadIds?.length
       ? importResult.planilhaUploadIds
@@ -1350,10 +1347,6 @@ export class WhatsappPlanilhaPipelineService {
       resumo: fileName || 'planilha',
     });
     console.log(`[WhatsappPipeline] Importando ${fileName || 'planilha'}${tamanhoTxt} grupo=${grupoJid}`);
-    await avisarGrupoWhatsapp(
-      grupoJid,
-      `Recebi a planilha *${fileName || 'arquivo'}*${tamanhoTxt}. Estou importando. Pode levar alguns minutos.`,
-    );
 
     const { buffer, nomeArquivo: nomeRaw } = await obterBufferPlanilha(payload, doc);
     const nomeArquivo = EXT_PLANILHA.test(nomeRaw) ? nomeRaw : `${nomeRaw.replace(/\.[^.]+$/, '') || 'planilha'}.xlsx`;
@@ -1412,37 +1405,23 @@ export class WhatsappPlanilhaPipelineService {
       const conferencia = await conferenciaDoUpload(id);
       if (conferencia) conferencias.push(conferencia);
     }
-    const nomeGrupo = conferencias.length > 1 && conferencias.every((c) => c.tipo === 'producao')
-      ? 'Produção'
-      : undefined;
-    const textoConferencia = mensagemWhatsappDeConferencias(conferencias, nomeGrupo);
-    const servicosTxt = importResult.alvos
-      .filter((a) => a.importados > 0)
-      .map((a) => `${a.servicoNome} (${a.importados})`)
-      .join(' · ');
-    const diasTxt = diasPorServico
-      .filter((d) => d.dia)
-      .map((d) => `${d.nome}: ${String(d.dia).split('-').reverse().join('/')}`)
-      .join(' · ');
-    const fraseDias = importResult.diasAtualizados != null && importResult.diasIguais != null
-      ? fraseDiasHash(importResult.diasAtualizados, importResult.diasIguais)
-      : null;
-    const cabeca = fraseDias && importResult.importadas === 0 && (importResult.diasIguais ?? 0) > 0
-      ? `✅ Planilha já estava igual. ${fraseDias}.`
-      : `✅ ${importResult.importadas} registro(s) importado(s)`;
-    const rodape = 'Para o PDF, envie *dia 16/09* com a data desejada. Saúde: *saude*.';
-    const resumo = textoConferencia
-      ? `${textoConferencia}\n${rodape}`
-      : [
-        cabeca,
-        fraseDias && importResult.importadas > 0 ? fraseDias : null,
-        servicosTxt ? servicosTxt : null,
-        `Contrato: ${contratoNome}`,
-        diasTxt ? `Último dia: ${diasTxt}` : null,
-        rodape,
-      ].filter(Boolean).join('\n');
+    const periodos = conferencias.flatMap((c) => [c.periodoInicio, c.periodoFim]).filter((d): d is string => !!d).sort();
+    const nomesServico = [...new Set(
+      (conferencias.length
+        ? conferencias.map((c) => c.nome)
+        : importResult.alvos.map((a) => a.servicoNome)
+      ).map((n) => String(n || '').trim()).filter(Boolean),
+    )];
+    const linhasFora = conferencias.reduce((s, c) => s + c.ignoradas.length, 0);
+    const resumo = textoPlanilhaImportada({
+      servico: nomesServico.join(', ') || servicoMapa.nome,
+      contrato: contratoNome === '—' ? '' : contratoNome,
+      inicio: periodos[0] || null,
+      fim: periodos[periodos.length - 1] || null,
+      linhasFora,
+    });
     try {
-      if (!grupoJid.endsWith('@g.us')) await wuzapiService.enviarTexto(grupoJid, resumo);
+      await wuzapiService.enviarTexto(grupoJid, resumo);
     } catch { /* ignore */ }
 
     return {

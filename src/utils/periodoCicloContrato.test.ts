@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { decidirDatasDaPlanilha } from '../services/cicloPlanilhaService';
 import {
+  buracosDentroDeCadaCiclo,
   calcularCicloMensalContrato,
   limitarDiasAusentesAoPeriodoDaPlanilha,
   montarJanelasComparativoCiclo,
@@ -57,6 +59,44 @@ describe('restringirDatasAoCicloDaDataMaisRecente', () => {
     );
     assert.deepEqual(datas, ['2026-08-01', '2026-08-15']);
     assert.deepEqual(ignoradas, []);
+  });
+});
+
+describe('buracosDentroDeCadaCiclo', () => {
+  it('não apaga o ciclo atual por causa de datas do ciclo anterior no mesmo arquivo', () => {
+    const sistema = ['2026-10-21', '2026-10-22', '2026-10-25', '2026-10-26', '2026-10-29'];
+    const planilha = ['2026-10-20', '2026-10-21', '2026-10-29'];
+    assert.deepEqual(buracosDentroDeCadaCiclo(sistema, planilha, 25), []);
+  });
+
+  it('apaga buraco só no intervalo coberto daquele ciclo', () => {
+    const sistema = ['2026-10-26', '2026-10-28'];
+    const planilha = ['2026-10-25', '2026-10-29'];
+    assert.deepEqual(
+      buracosDentroDeCadaCiclo(sistema, planilha, 25),
+      ['2026-10-26', '2026-10-28'],
+    );
+  });
+});
+
+describe('decidirDatasDaPlanilha', () => {
+  it('mantém dia de outro ciclo quando ele não está fechado', () => {
+    const r = decidirDatasDaPlanilha(
+      ['2026-10-20', '2026-10-21', '2026-10-25', '2026-10-29'],
+      [],
+      25,
+    );
+    assert.deepEqual(r.datas, ['2026-10-20', '2026-10-21', '2026-10-25', '2026-10-29']);
+    assert.equal(r.cicloAlvo?.dataInicio, '2026-10-25');
+  });
+
+  it('descarta só a data que cai em ciclo fechado', () => {
+    const r = decidirDatasDaPlanilha(
+      ['2026-10-20', '2026-10-25', '2026-10-29'],
+      ['2026-10-20'],
+      25,
+    );
+    assert.deepEqual(r.datas, ['2026-10-25', '2026-10-29']);
   });
 });
 

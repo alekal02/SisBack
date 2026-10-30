@@ -270,9 +270,9 @@ export function limparCancelamentoImportacao(chave?: string): void {
   else cancelamentos.clear();
 }
 
-export function textoEscolhaContrato(pergunta: string, contratos: Array<{ nome: string }>): string {
-  const linhas = contratos.map((c, i) => `${i + 1}. ${c.nome}`);
-  return [pergunta, ...linhas, 'Responda com o número.'].join('\n');
+export function textoEscolhaContrato(_pergunta: string, contratos: Array<{ nome: string }>): string {
+  const linha = contratos.map((c, i) => `${i + 1} ${c.nome}`).join(' · ');
+  return `Qual contrato?\n${linha}`;
 }
 
 export function acaoSegueProcessamento(acao: DecisaoConversaPrivada['acao']): boolean {

@@ -14,6 +14,13 @@ import {
   ehPedidoOperacional,
   ehPedidoEvolucao,
   textoMereceProcessamento,
+  interpretarPedidoRelatorio,
+  legendaRelatorioPdf,
+  resolverEscolhasLista,
+  textoMenuRelatorio,
+  textoMenuServicos,
+  TEXTO_EVOLUCAO_SO_COLETA,
+  TEXTO_LISTA_INVALIDA,
 } from './WhatsappComandoRelatorioTexto';
 
 describe('WhatsApp — data no comando do dia', () => {
@@ -124,5 +131,53 @@ describe('WhatsApp — ciclo anterior nos relatórios', () => {
     assert.equal(resolverQualCicloMenu('anterior'), 'anterior');
     assert.equal(resolverQualCicloMenu('ciclo fechado'), 'anterior');
     assert.equal(resolverQualCicloMenu('xyz'), null);
+  });
+});
+
+describe('WhatsApp — mensagens curtas do relatório', () => {
+  it('menu de tipo e de serviço cabem em poucas linhas', () => {
+    assert.equal(textoMenuRelatorio(), 'Qual relatório?\n1 Dia · 2 Ciclo · 3 Evolução');
+    assert.equal(
+      textoMenuServicos(['Coleta', 'Roçada', 'Varrição']),
+      'Qual serviço?\n1 Coleta · 2 Roçada · 3 Varrição · 0 Todos\n(pode escolher vários: 1,3)',
+    );
+    assert.equal(TEXTO_LISTA_INVALIDA, 'Responda com o número da lista.');
+    assert.equal(TEXTO_EVOLUCAO_SO_COLETA, 'Evolução só está disponível para Coleta.');
+    assert.equal(textoMenuRelatorio().includes('16/09'), false);
+    assert.equal(textoMenuRelatorio().includes('Saúde'), false);
+  });
+
+  it('atalho completo não abre menu; relatório sozinho abre', () => {
+    const ciclo = interpretarPedidoRelatorio('ciclo coleta');
+    assert.equal(ciclo?.formato, 'ciclo');
+    assert.equal(ciclo?.tipoServico, 'coleta_caminhao');
+    assert.equal(ciclo?.abrirMenuTipo, false);
+
+    const dia = interpretarPedidoRelatorio('dia 29/10 rocada', '2026-10-30');
+    assert.equal(dia?.formato, 'dia');
+    assert.equal(dia?.tipoServico, 'rocadeira');
+    assert.equal(dia?.dataIso, '2026-10-29');
+
+    const todos = interpretarPedidoRelatorio('evolucao todos');
+    assert.equal(todos?.formato, 'evolucao');
+    assert.equal(todos?.todos, true);
+
+    const menu = interpretarPedidoRelatorio('relatorio');
+    assert.equal(menu?.abrirMenuTipo, true);
+    assert.equal(menu?.formato, null);
+  });
+
+  it('aceita vários números e rejeita texto fora da lista', () => {
+    assert.deepEqual(resolverEscolhasLista('1,3', 4), [1, 3]);
+    assert.deepEqual(resolverEscolhasLista('0', 4), 'todos');
+    assert.equal(resolverEscolhasLista('9', 4), null);
+    assert.equal(resolverEscolhasLista('coleta', 4), null);
+  });
+
+  it('legenda do PDF é uma linha', () => {
+    assert.equal(
+      legendaRelatorioPdf('Ciclo', 'Coleta', 'Aparecida', '2026-10-25', '2026-10-30'),
+      'Ciclo · Coleta · Aparecida · 25/10 a 30/10',
+    );
   });
 });

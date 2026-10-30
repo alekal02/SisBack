@@ -28,7 +28,7 @@ import {
   persistirArquivoOriginalUpload,
   type OrigemPlanilhaUpload,
 } from './planilhaOriginalStorage';
-import { limitarDiasAusentesAoPeriodoDaPlanilha, normalizarDiaInicioCiclo } from '../utils/periodoCicloContrato';
+import { buracosDentroDeCadaCiclo, inferirMesReferenciaDeData, normalizarDiaInicioCiclo } from '../utils/periodoCicloContrato';
 import { invalidarCacheDadosServico } from './servicoDadosCache';
 import { invalidarCacheDashboardServico } from '../controllers/ServicoController';
 import { recalcularTotaisDiasServicoSilencioso } from './coletaTotaisDiaService';
@@ -1244,7 +1244,6 @@ export class DeduplicacaoService {
   private async diasAusentesNoPeriodo(
     servicoId: string,
     datasPlanilha: string[],
-    cicloAlvo: { dataInicio: string; dataFim: string } | null,
   ): Promise<string[]> {
     const uploadIds = await obterUploadIdsModificaveis(servicoId);
     if (uploadIds.length === 0 || datasPlanilha.length === 0) return [];
@@ -1256,18 +1255,26 @@ export class DeduplicacaoService {
       .getRawMany<{ data: string }>();
     const diasSistema = diasSistemaRows
       .map((r) => r.data)
-      .filter((d): d is string => Boolean(d))
-      .filter((d) => !cicloAlvo || (d >= cicloAlvo.dataInicio && d <= cicloAlvo.dataFim));
-    return limitarDiasAusentesAoPeriodoDaPlanilha(diasSistema, datasPlanilha);
+      .filter((d): d is string => Boolean(d));
+    const diaInicio = await this.obterDiaInicioCicloServico(servicoId);
+    const ordenadas = [...datasPlanilha].filter(Boolean).sort();
+    const maisRecente = ordenadas[ordenadas.length - 1];
+    const ref = maisRecente ? inferirMesReferenciaDeData(maisRecente, diaInicio) : null;
+    const datasDoCicloRecente = ref
+      ? ordenadas.filter((data) => {
+        const item = inferirMesReferenciaDeData(data, diaInicio);
+        return item.ano === ref.ano && item.mes === ref.mes;
+      })
+      : ordenadas;
+    return buracosDentroDeCadaCiclo(diasSistema, datasDoCicloRecente, diaInicio);
   }
 
   /**
    * Importa uma planilha usando estratégia baseada em DATA.
    * 
-   * 'atualizar_data' → a planilha é a verdade do PERÍODO que ela cobre:
-   *   apaga os dias presentes no arquivo (ciclo aberto) e reinsere; também
-   *   remove buracos entre a 1ª e a última data do arquivo. Datas de ciclo
-   *   já fechado, ou anteriores ao intervalo da planilha, nunca são apagadas.
+   * 'atualizar_data' → a planilha é a verdade dos dias que ela traz, em cada
+   *   ciclo aberto: apaga esses dias e reinsere, e tira buracos só dentro do
+   *   intervalo daquele ciclo. Ciclo fechado não entra e não é apagado.
    * 
    * 'inserir_data' → insere apenas registros de datas que AINDA NÃO
    *   existem no banco. Datas já existentes são ignoradas.
@@ -1327,11 +1334,9 @@ export class DeduplicacaoService {
     let datasUnicas = Array.from(mapaDatas.keys()).sort();
     const avisos: string[] = [];
     let datasIgnoradasCicloFechado: string[] = [];
-    let cicloAlvo: { dataInicio: string; dataFim: string } | null = null;
 
     if (servicoId && datasUnicas.length > 0) {
       const prep = await prepararDatasImportacaoCiclo(servicoId, datasUnicas);
-      cicloAlvo = prep.cicloAlvo;
       datasIgnoradasCicloFechado = prep.bloqueadasFechado;
       avisos.push(...prep.avisos);
       if (prep.datas.length === 0 && prep.bloqueadasFechado.length > 0) {
@@ -1357,7 +1362,7 @@ export class DeduplicacaoService {
       datasRegravar = decisao.regravar;
       diasAtualizados = decisao.regravar.length;
       diasIguais = decisao.iguais.length;
-      buracos = await this.diasAusentesNoPeriodo(servicoId, datasUnicas, cicloAlvo);
+      buracos = await this.diasAusentesNoPeriodo(servicoId, datasUnicas);
       if (datasRegravar.length === 0 && buracos.length === 0) {
         return {
           planilhaUploadId: 0,
@@ -1426,7 +1431,7 @@ export class DeduplicacaoService {
         if (!datasRegravar) {
           diasAtualizados = datasUnicas.length;
           diasIguais = 0;
-          buracos = await this.diasAusentesNoPeriodo(servicoId, datasUnicas, cicloAlvo);
+          buracos = await this.diasAusentesNoPeriodo(servicoId, datasUnicas);
         }
       } else if (!servicoId) {
         diasAtualizados = datasUnicas.length;
@@ -1452,6 +1457,7 @@ export class DeduplicacaoService {
     }
 
     const datasSet = new Set(datasParaImportar);
+    const datasAbertas = new Set(datasUnicas);
     const maisRecente = dataMaisRecente(linhas.map((l) => l.dataSaida));
     const chavesNoArquivo = new Set<string>();
     const linhasIgnoradasRegistro: LinhaIgnoradaRegistro[] = [];
@@ -1470,6 +1476,7 @@ export class DeduplicacaoService {
         continue;
       }
       if (!datasSet.has(chaveData)) {
+        if (datasAbertas.has(chaveData)) continue;
         ignorados++;
         linhasIgnoradasRegistro.push({ linhaExcel: linha.linhaExcel, motivo: MOTIVO_LINHA_IGNORADA.foraDoCiclo });
         continue;

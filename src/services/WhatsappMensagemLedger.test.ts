@@ -11,6 +11,7 @@ import {
   MOTIVO_INTERROMPIDO,
   reservarMensagemWhatsapp,
   textoFalhaImportacao,
+  textoPlanilhaImportada,
   textoGrupoNaoConfigurado,
 } from './WhatsappMensagemLedger';
 
@@ -100,7 +101,37 @@ describe('ledger do chatbot — memória com concorrência', () => {
 
   it('avisa grupo não configurado e falha de importação sem apagar o detalhe', () => {
     assert.match(textoGrupoNaoConfigurado(), /não está configurado/);
-    assert.match(textoFalhaImportacao('ciclo fechado'), /ciclo fechado/);
+    assert.equal(
+      textoFalhaImportacao('ciclo fechado'),
+      '❌ Não consegui importar: o período da planilha está em um ciclo fechado.',
+    );
+    assert.equal(
+      textoFalhaImportacao('null value in column "id"'),
+      '❌ Não consegui importar: não deu para ler esta planilha.',
+    );
+    assert.equal(
+      textoFalhaImportacao('A planilha contém 3 data(s) em ciclo(s) já fechado(s) (outubro).'),
+      '❌ Não consegui importar: o período da planilha está em um ciclo fechado.',
+    );
+    assert.equal(
+      textoPlanilhaImportada({
+        servico: 'Coleta',
+        contrato: 'Aparecida de Goiânia',
+        inicio: '2026-10-25',
+        fim: '2026-10-29',
+      }),
+      '✅ Planilha importada — Coleta · Aparecida de Goiânia · 25/10 a 29/10',
+    );
+    assert.equal(
+      textoPlanilhaImportada({
+        servico: 'Coleta',
+        contrato: 'Aparecida de Goiânia',
+        inicio: '2026-10-25',
+        fim: '2026-10-29',
+        linhasFora: 31,
+      }),
+      '✅ Planilha importada — Coleta · Aparecida de Goiânia · 25/10 a 29/10\n⚠️ 31 linhas não entraram. Veja os detalhes no painel.',
+    );
   });
 
   it('depois da queda retoma uma vez, abandona na segunda e não repete no pull seguinte', async () => {

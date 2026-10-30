@@ -23,7 +23,6 @@ import {
   parsearPlanilhaConsolidadoProducao,
   type LinhaConsolidadoProducao,
 } from './consolidadoProducaoPlanilhaParser';
-import { restringirDatasAoCicloDaDataMaisRecente } from '../utils/periodoCicloContrato';
 import { filtrarColetasProducaoNovas } from './producaoDedupService';
 import { ColetaData } from '../entities/ColetaData';
 import { nomeAbaColeta, linhasExcelPreenchidas } from './abaColeta';
@@ -181,15 +180,8 @@ function totaisRelatorioDia(rows: ColetaData[]): { ton: number; viagens: number;
   return { ton: round2(ton), viagens, km: round2(km) };
 }
 
-function importarProducaoComoUpload(buffer: Buffer, diaInicioCiclo: number) {
+function importarProducaoComoUpload(buffer: Buffer, _diaInicioCiclo: number) {
   const parsed = parsearPlanilhaConsolidadoProducao(buffer);
-  const datas = [...new Set(
-    parsed.linhas
-      .map((l) => (l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null))
-      .filter((d): d is string => !!d),
-  )];
-  const restrito = restringirDatasAoCicloDaDataMaisRecente(datas, diaInicioCiclo);
-  const permitidas = new Set(restrito.datas);
   const cons = ConsolidadoProducaoImportService as unknown as ConsolidadoInterno;
 
   let foraCiclo = 0;
@@ -200,10 +192,7 @@ function importarProducaoComoUpload(buffer: Buffer, diaInicioCiclo: number) {
 
   for (const [, linhasServico] of agruparLinhasPorServicoAba(parsed.linhas)) {
     const nome = linhasServico[0].nomeServico;
-    const noCiclo = linhasServico.filter((l) => {
-      const d = l.dataSaida ? l.dataSaida.toISOString().slice(0, 10) : null;
-      return Boolean(d && permitidas.has(d));
-    });
+    const noCiclo = linhasServico.filter((l) => l.dataSaida);
     const fora = linhasServico.length - noCiclo.length;
     foraCiclo += fora;
     if (fora > 0) foraPorServico[nome] = fora;
@@ -240,7 +229,7 @@ function importarProducaoComoUpload(buffer: Buffer, diaInicioCiclo: number) {
     repetidas,
     porServico,
     coletasPorServico,
-    datasIgnoradas: restrito.ignoradas,
+    datasIgnoradas: [] as string[],
   };
 }
 
@@ -433,21 +422,18 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
     assert.match(conf.mensagem, /serviço Feiras criado/);
   });
 
-  it('produção: ciclo dia 25, repetidas e totais por serviço', () => {
+  it('produção: ciclo aberto anterior entra; repetidas e totais por serviço', () => {
     assert.equal(classificarPlanilhaContrato(producaoBuf).tipo, 'consolidado_producao');
     const r = importarProducaoComoUpload(producaoBuf, 25);
     const diffs: string[] = [];
     if (r.lidas !== 7680) diffs.push(`linhas lidas ${r.lidas} (esperado 7680)`);
-    if (r.importadas !== 7653) diffs.push(`importadas ${r.importadas} (esperado 7653)`);
-    if (r.foraCiclo !== 21) diffs.push(`fora do ciclo ${r.foraCiclo} (esperado 21)`);
-    if (r.foraPorServico['Roçada Manual'] !== 21) {
-      diffs.push(`fora do ciclo por serviço ${JSON.stringify(r.foraPorServico)} (esperado Roçada Manual 21)`);
-    }
+    if (r.importadas !== 7674) diffs.push(`importadas ${r.importadas} (esperado 7674)`);
+    if (r.foraCiclo !== 0) diffs.push(`fora do ciclo ${r.foraCiclo} (esperado 0 — ciclo aberto não é descartado)`);
     if (r.repetidas !== 6) diffs.push(`repetidas ${r.repetidas} (esperado 6)`);
 
     const esperado: Array<{ nome: string; regs: number; areaM2?: number; km?: number }> = [
       { nome: 'Roçada Mecanizada', regs: 3909, areaM2: 2657770.71 },
-      { nome: 'Roçada Manual', regs: 1346, areaM2: 1726220.26 },
+      { nome: 'Roçada Manual', regs: 1367, areaM2: 1753038.77 },
       { nome: 'Varrição Manual', regs: 1842, km: 11100.93 },
       { nome: 'Varrição Mecanizada', regs: 60, km: 3136.97 },
       { nome: 'Remoção de Entulho', regs: 275 },

@@ -184,6 +184,128 @@ export function textoMereceProcessamento(bruto: string): boolean {
   return false;
 }
 
+const ROTULO_CURTO_TIPO: Record<string, string> = {
+  coleta_caminhao: 'Coleta',
+  rocadeira: 'Roçada',
+  varricao: 'Varrição',
+  capina: 'Capina',
+  poda: 'Poda',
+  remocao: 'Remoção',
+  pintura_meio_fio: 'Pintura',
+  coleta_seletiva: 'Coleta seletiva',
+  aterro: 'Aterro',
+  geral: 'Geral',
+};
+
+export const TEXTO_LISTA_INVALIDA = 'Responda com o número da lista.';
+export const TEXTO_EVOLUCAO_SO_COLETA = 'Evolução só está disponível para Coleta.';
+
+export type FormatoRelatorioCurto = 'dia' | 'ciclo' | 'evolucao';
+
+export interface PedidoRelatorioCurto {
+  formato: FormatoRelatorioCurto | null;
+  tipoServico: string | null;
+  todos: boolean;
+  dataIso: string | null;
+  qualCiclo: QualCiclo;
+  /** Falta o tipo (Dia/Ciclo/Evolução): a próxima fala é o menu curto. */
+  abrirMenuTipo: boolean;
+}
+
+export function rotuloCurtoServico(tipo: string, nome?: string): string {
+  const curto = ROTULO_CURTO_TIPO[String(tipo || '')];
+  if (curto) return curto;
+  const limpo = String(nome || '').trim();
+  return limpo || 'Serviço';
+}
+
+export function periodoCurtoLegenda(inicio?: string | null, fim?: string | null): string {
+  const ini = String(inicio || '').slice(0, 10);
+  const end = String(fim || '').slice(0, 10);
+  const ok = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if (!ok(ini)) return '';
+  const dia = (iso: string, comAno: boolean) => {
+    const [ano, mes, d] = iso.split('-');
+    return comAno ? `${d}/${mes}/${ano}` : `${d}/${mes}`;
+  };
+  if (!ok(end) || ini === end) return dia(ini, false);
+  const mesmoAno = ini.slice(0, 4) === end.slice(0, 4);
+  return `${dia(ini, !mesmoAno)} a ${dia(end, !mesmoAno)}`;
+}
+
+export function legendaRelatorioPdf(
+  tipo: string,
+  servico: string,
+  contrato: string,
+  inicio?: string | null,
+  fim?: string | null,
+): string {
+  return [tipo, servico, contrato, periodoCurtoLegenda(inicio, fim)].filter((p) => String(p || '').trim()).join(' · ');
+}
+
+export function textoMenuRelatorio(): string {
+  return 'Qual relatório?\n1 Dia · 2 Ciclo · 3 Evolução';
+}
+
+export function textoMenuServicos(rotulos: string[]): string {
+  const itens = rotulos.map((rotulo, i) => `${i + 1} ${rotulo}`).join(' · ');
+  return `Qual serviço?\n${itens} · 0 Todos\n(pode escolher vários: 1,3)`;
+}
+
+/** "1", "1,3", "0" ou "todos". Número fora da lista ou texto solto devolve null. */
+export function resolverEscolhasLista(norm: string, max: number): number[] | 'todos' | null {
+  const t = String(norm || '').trim();
+  if (!t || max < 1) return null;
+  if (t === '0' || t === 'todos' || t === 'tudo') return 'todos';
+  const partes = t.split(/[,;]+|\s+/).map((p) => p.trim()).filter(Boolean);
+  if (!partes.length || partes.some((p) => !/^\d+$/.test(p))) return null;
+  const nums: number[] = [];
+  for (const p of partes) {
+    const n = Number(p);
+    if (!Number.isInteger(n) || n < 1 || n > max || nums.includes(n)) return null;
+    nums.push(n);
+  }
+  return nums;
+}
+
+/**
+ * Atalho numa frase ("ciclo coleta", "dia 29/10 roçada", "evolução todos")
+ * ou o pedido que ainda precisa do menu de tipo.
+ */
+export function interpretarPedidoRelatorio(norm: string, hojeIso?: string): PedidoRelatorioCurto | null {
+  const t = String(norm || '').trim();
+  if (!t || ehPedidoSaude(t)) return null;
+  if (/^(cancelar|sair|voltar|menu|ajuda|help|comandos)$/.test(t)) return null;
+  if (/^(peso|comparativo|comparar|analise de peso)\b/.test(t)) return null;
+  const dataIso = extrairDataIsoComando(t, hojeIso);
+  const todos = /\b(todos|tudo)\b/.test(t);
+  const tipoServico = extrairTipoServicoComando(t);
+  let formato: FormatoRelatorioCurto | null = null;
+  if (/\b(evolucao|graficos|grafico)\b/.test(t)) formato = 'evolucao';
+  else if (/\bciclo\b/.test(t)) formato = 'ciclo';
+  else if (/\b(dia|diario|diaria)\b/.test(t)) formato = 'dia';
+  const qualCiclo: QualCiclo = textoPedeCicloAnterior(t) ? 'anterior' : 'atual';
+  if (/^(relatorio|relatorios|report|pdf)$/.test(t)) {
+    return {
+      formato: null,
+      tipoServico: null,
+      todos: false,
+      dataIso: null,
+      qualCiclo: 'atual',
+      abrirMenuTipo: true,
+    };
+  }
+  if (!formato && !tipoServico && !dataIso && !todos) return null;
+  return {
+    formato,
+    tipoServico,
+    todos,
+    dataIso,
+    qualCiclo,
+    abrirMenuTipo: !formato,
+  };
+}
+
 /** Menu atual/anterior — o "2" aqui é ciclo anterior (não análise de peso). */
 export function resolverQualCicloMenu(norm: string): QualCiclo | null {
   if (textoPedeCicloAnterior(norm)) return 'anterior';

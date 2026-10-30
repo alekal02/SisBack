@@ -31,7 +31,9 @@ import {
   calcularCicloMensalContrato,
   formatarDataBr,
   inferirMesReferenciaAtual,
+  inferirMesReferenciaDeData,
   isIsoDate,
+  limitarDiasAusentesAoPeriodoDaPlanilha,
   normalizarDiaInicioCiclo,
   recortarPeriodoAteReferencia,
 } from '@sistemma/shared';
@@ -134,4 +136,35 @@ export function resolverFiltrosPeriodoQuery(
     filtros: { dataInicio: recorte.dataInicio, dataFim: recorte.dataFim },
     periodo,
   };
+}
+
+/**
+ * Buracos que a planilha pode apagar, um ciclo por vez.
+ * O intervalo de um ciclo não alcança os dias do outro: um arquivo com o
+ * ciclo anterior aberto e o atual não apaga o que está fora de cada faixa.
+ */
+export function buracosDentroDeCadaCiclo(
+  datasSistema: string[],
+  datasPlanilha: string[],
+  diaInicioCiclo: number,
+): string[] {
+  const planilha = [...new Set(datasPlanilha.filter((d) => isIsoDate(d)))].sort();
+  if (planilha.length === 0) return [];
+  const grupos = new Map<string, string[]>();
+  for (const data of planilha) {
+    const ref = inferirMesReferenciaDeData(data, diaInicioCiclo);
+    const chave = `${ref.ano}-${ref.mes}`;
+    const lista = grupos.get(chave) || [];
+    lista.push(data);
+    grupos.set(chave, lista);
+  }
+  const sistema = [...new Set(datasSistema.filter((d) => isIsoDate(d)))];
+  const buracos: string[] = [];
+  for (const [chave, datas] of grupos) {
+    const [ano, mes] = chave.split('-').map((n) => parseInt(n, 10));
+    const ciclo = calcularCicloMensalContrato(ano, mes, diaInicioCiclo);
+    const noCiclo = sistema.filter((d) => d >= ciclo.dataInicio && d <= ciclo.dataFim);
+    buracos.push(...limitarDiasAusentesAoPeriodoDaPlanilha(noCiclo, datas));
+  }
+  return [...new Set(buracos)].sort();
 }
