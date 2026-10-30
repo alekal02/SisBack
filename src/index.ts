@@ -13,6 +13,7 @@ import AppDataSource, { isMultiTenant } from './database/data-source';
 import { MAX_BODY_BYTES, limiteCorpoPorRota } from './config/limitesRecursos';
 import { receberCorpoWebhook } from './services/webhookCorpoStream';
 import { iniciarAplicacao } from './bootstrap';
+import whatsappAutorizadoLoteRoutes from './routes/whatsappAutorizadoLote';
 
 const app: Express = express();
 const PORT = Number(process.env.PORT || process.env.APP_PORT || 3200);
@@ -279,6 +280,7 @@ app.post('/api/qualidade-coleta/corrigir', authenticate, qMulter.single('planilh
 
 app.use('/api/coleta', coletaRoutes); // coleta já tem authenticate interno
 app.use('/api/contracts', contractsRoutes); // contratos (requer autenticação)
+app.use('/api/contratos', whatsappAutorizadoLoteRoutes);
 app.use('/api/contracts/:contractId/servicos', servicosRoutes); // serviços aninhados
 
 // Rotas de KPIs Universais

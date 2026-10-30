@@ -13,10 +13,18 @@ export function decidirAcaoVigia(sessao: { connected: boolean; loggedIn: boolean
  * Sem este ciclo o webhook fica mudo até alguém escanear o QR de novo.
  */
 export function iniciarVigiaSessaoWhatsapp(): void {
-  if (!wuzapiService.isConfigured) return;
+  if (!process.env.WUZAPI_URL?.trim()) return;
   const intervalo = parseInt(process.env.WUZAPI_VIGIA_MS || '60000', 10);
+  let avisouSemInstancia = false;
   const tick = async () => {
     try {
+      if (!(await wuzapiService.temInstanciaPropria())) {
+        if (!avisouSemInstancia) {
+          avisouSemInstancia = true;
+          console.log('[WuzapiVigia] Sem instância própria. Nenhuma sessão de outro sistema foi alterada.');
+        }
+        return;
+      }
       const sessao = await wuzapiService.getStatus();
       const acao = decidirAcaoVigia(sessao);
       if (acao === 'reconectar') {
