@@ -99,6 +99,35 @@ export async function listarAutorizadosPorContrato(contractId: string) {
   return rows.map((r) => paraApi(r, nomes.get(r.contractId)));
 }
 
+/** Nome e número de cada contrato conhecido, para saber se a planilha é de outro. */
+export async function listarContratosDetectaveis(): Promise<ContratoAutorizadoWhatsapp[]> {
+  if (repoAutorizadoTeste) return [];
+  if (isMultiTenant()) {
+    const tenants = await getControlDataSource().getRepository(Tenant).find();
+    return tenants
+      .filter((tenant) => tenant.contractId && tenant.numeroContrato)
+      .map((tenant) => ({
+        contractId: tenant.contractId,
+        nome: tenant.numeroContrato,
+        numero: tenant.numeroContrato,
+        podeEnviarPlanilha: true,
+        podePedirRelatorio: true,
+        ativo: true,
+      }));
+  }
+  const contratos = await getControlDataSource().getRepository(Contract).find();
+  return contratos
+    .filter((contrato) => contrato.numeroContrato)
+    .map((contrato) => ({
+      contractId: contrato.id,
+      nome: contrato.numeroContrato || contrato.id,
+      numero: contrato.numeroContrato,
+      podeEnviarPlanilha: true,
+      podePedirRelatorio: true,
+      ativo: true,
+    }));
+}
+
 export async function pessoasAtivasPorTelefone(telefone: string): Promise<ContratoAutorizadoWhatsapp[]> {
   const variantes = variantesTelefoneBr(telefone);
   if (!variantes.length) return [];
@@ -107,6 +136,7 @@ export async function pessoasAtivasPorTelefone(telefone: string): Promise<Contra
   return rows.map((r) => ({
     contractId: r.contractId,
     nome: nomes.get(r.contractId) || r.contractId,
+    numero: nomes.get(r.contractId) || null,
     podeEnviarPlanilha: r.podeEnviarPlanilha,
     podePedirRelatorio: r.podePedirRelatorio,
     ativo: r.ativo,

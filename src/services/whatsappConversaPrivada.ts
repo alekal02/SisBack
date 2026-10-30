@@ -1,8 +1,10 @@
+import * as XLSX from 'xlsx';
 import { extrairDataIsoComando, resolverEscolhaIndice } from './WhatsappComandoRelatorioTexto';
 
 export const LIMITE_MENSAGENS_POR_MINUTO = 10;
 export const JANELA_LIMITE_MS = 60_000;
 export const TTL_PLANILHA_PENDENTE_MS = 30 * 60 * 1000;
+export const TTL_CANCELAR_IMPORTACAO_MS = 10 * 60 * 1000;
 
 export type TipoTentativaWhatsapp = 'planilha' | 'relatorio';
 export type OrigemTelefoneWhatsapp = 'telefone' | 'sender_alt' | 'lid' | 'nenhuma';
@@ -10,9 +12,25 @@ export type OrigemTelefoneWhatsapp = 'telefone' | 'sender_alt' | 'lid' | 'nenhum
 export interface ContratoAutorizadoWhatsapp {
   contractId: string;
   nome: string;
+  /** Número do contrato, quando for diferente do nome exibido. */
+  numero?: string | null;
   podeEnviarPlanilha: boolean;
   podePedirRelatorio: boolean;
   ativo?: boolean;
+}
+
+export interface PistasPlanilhaWhatsapp {
+  nomeArquivo?: string;
+  abas?: string[];
+  cabecalhos?: string[];
+}
+
+export interface CancelamentoImportacaoWhatsapp {
+  expiraEm: number;
+  contractId: string;
+  nome: string;
+  uploadIds: number[];
+  desfazimentoSeguro: boolean;
 }
 
 export interface OpcaoContratoWhatsapp {
@@ -36,7 +54,10 @@ export type DecisaoConversaPrivada =
   | { acao: 'silencio'; tipo: TipoTentativaWhatsapp }
   | { acao: 'contrato_nao_autorizado' }
   | { acao: 'perguntar_planilha'; contratos: OpcaoContratoWhatsapp[] }
-  | { acao: 'importar'; contractId: string }
+  | { acao: 'importar'; contractId: string; detectado?: boolean }
+  | { acao: 'planilha_outro_contrato'; nome: string }
+  | { acao: 'cancelar_importacao'; contractId: string; nome: string; uploadIds: number[]; desfazimentoSeguro: boolean }
+  | { acao: 'cancelar_expirado'; nome: string }
   | { acao: 'perguntar_relatorio'; contratos: OpcaoContratoWhatsapp[]; texto: string }
   | { acao: 'relatorio'; contractId: string; texto: string }
   | { acao: 'planilha_expirada' }
@@ -55,7 +76,15 @@ const PALAVRAS_COMANDO = new Set([
 ]);
 
 const pendencias = new Map<string, PendenciaWhatsapp>();
+const cancelamentos = new Map<string, CancelamentoImportacaoWhatsapp>();
 const cotas = new Map<string, number[]>();
+
+const PALAVRAS_GENERICAS_PLANILHA = new Set([
+  'producao', 'planilha', 'coleta', 'consolidado', 'contrato', 'contratos', 'servico', 'servicos',
+  'produtividade', 'relatorio', 'relatorios', 'geral', 'municipal', 'prefeitura', 'filial',
+  'unidade', 'tabela', 'dados', 'total', 'periodo', 'outubro', 'setembro', 'novembro',
+  'dezembro', 'janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto',
+]);
 
 export function mensagemDeGrupo(opts: { isGroup?: boolean; chat?: string; sender?: string }): boolean {
   if (opts.isGroup === true) return true;
@@ -225,6 +254,20 @@ export function limparPendencia(chave: string): void {
 
 export function limparPendenciasWhatsapp(): void {
   pendencias.clear();
+  cancelamentos.clear();
+}
+
+export function guardarCancelamentoImportacao(chave: string, item: CancelamentoImportacaoWhatsapp): void {
+  cancelamentos.set(chave, item);
+}
+
+export function obterCancelamentoImportacao(chave: string): CancelamentoImportacaoWhatsapp | null {
+  return cancelamentos.get(chave) || null;
+}
+
+export function limparCancelamentoImportacao(chave?: string): void {
+  if (chave) cancelamentos.delete(chave);
+  else cancelamentos.clear();
 }
 
 export function textoEscolhaContrato(pergunta: string, contratos: Array<{ nome: string }>): string {
@@ -302,6 +345,165 @@ function resumo(pessoas: ContratoAutorizadoWhatsapp[]): OpcaoContratoWhatsapp[] 
   return pessoas.map((p) => ({ contractId: p.contractId, nome: p.nome || p.contractId }));
 }
 
+function normFrase(texto: string): string {
+  return normalizarTextoWhatsapp(texto).replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function ehAnoIsolado(texto: string): boolean {
+  return /^(19|20)\d{2}$/.test(texto);
+}
+
+function fraseUtil(texto: string): string | null {
+  const frase = normFrase(texto);
+  if (frase.length < 3 || ehAnoIsolado(frase)) return null;
+  const partes = frase.split(' ').filter(Boolean);
+  if (partes.length > 0 && partes.every((p) => PALAVRAS_GENERICAS_PLANILHA.has(p) || ehAnoIsolado(p))) return null;
+  return frase;
+}
+
+/**
+ * Nome completo (duas ou mais palavras) ou número do contrato.
+ * Uma palavra solta, como "Centro" numa coluna, não identifica.
+ */
+function frasesIdentificacao(contrato: ContratoAutorizadoWhatsapp): string[] {
+  const brutas = [contrato.nome, contrato.numero || '']
+    .map((item) => fraseUtil(item || ''))
+    .filter((item): item is string => !!item);
+  return [...new Set(brutas.filter((frase) => frase.split(' ').length >= 2 || /\d/.test(frase)))];
+}
+
+function contemFrase(corpus: string, frase: string): boolean {
+  const alvo = ` ${frase} `;
+  let from = 0;
+  while (from < corpus.length) {
+    const idx = corpus.indexOf(alvo, from);
+    if (idx < 0) return false;
+    const anterior = corpus.slice(0, idx).trim().split(' ').pop() || '';
+    if (/^\d/.test(frase) && /^\d+$/.test(anterior)) {
+      from = idx + 1;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function extrairPistasPlanilha(buffer: Buffer, nomeArquivo?: string): PistasPlanilhaWhatsapp {
+  const abas: string[] = [];
+  const cabecalhos: string[] = [];
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false, sheetRows: 8 });
+    for (const nome of wb.SheetNames.slice(0, 12)) {
+      abas.push(nome);
+      const ws = wb.Sheets[nome];
+      if (!ws) continue;
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' }) as unknown[][];
+      for (const row of rows.slice(0, 6)) {
+        const texto = (row || []).map((celula) => String(celula ?? '').trim()).filter(Boolean).join(' ');
+        if (texto) cabecalhos.push(texto);
+      }
+    }
+  } catch {
+    /* planilha ilegível: segue sem pista e a conversa pergunta o contrato */
+  }
+  return { nomeArquivo, abas, cabecalhos };
+}
+
+function corpusPlanilha(pistas: PistasPlanilhaWhatsapp): string {
+  return ` ${normFrase([pistas.nomeArquivo, ...(pistas.abas || []), ...(pistas.cabecalhos || [])].filter(Boolean).join(' '))} `;
+}
+
+function contratosCitadosNaPlanilha(
+  pistas: PistasPlanilhaWhatsapp,
+  contratos: ContratoAutorizadoWhatsapp[],
+): ContratoAutorizadoWhatsapp[] {
+  const corpus = corpusPlanilha(pistas);
+  if (corpus.trim().length < 3) return [];
+  const hits = contratos
+    .filter((c) => c.ativo !== false)
+    .map((contrato) => ({
+      contrato,
+      frases: frasesIdentificacao(contrato).filter((frase) => contemFrase(corpus, frase)),
+    }))
+    .filter((item) => item.frases.length > 0);
+  const especificos = hits.filter((item) => !hits.some((outro) => {
+    if (outro.contrato.contractId === item.contrato.contractId) return false;
+    return outro.frases.some((longa) => item.frases.every((curta) => longa !== curta && longa.includes(curta)));
+  }));
+  return especificos.map((item) => item.contrato);
+}
+
+/**
+ * Entre os contratos em que a pessoa pode enviar planilha, devolve o único
+ * cujo nome completo ou número aparece no arquivo, nas abas ou no cabeçalho.
+ */
+export function identificarContratoPlanilha(
+  pistas: PistasPlanilhaWhatsapp,
+  contratos: ContratoAutorizadoWhatsapp[],
+): OpcaoContratoWhatsapp | null {
+  const citados = contratosCitadosNaPlanilha(
+    pistas,
+    contratos.filter((c) => c.podeEnviarPlanilha),
+  );
+  if (citados.length !== 1) return null;
+  const unico = citados[0];
+  return { contractId: unico.contractId, nome: unico.nome || unico.contractId };
+}
+
+/** Planilha cita nome completo ou número de um contrato que não é o da pessoa. */
+export function outroContratoCitadoNaPlanilha(
+  pistas: PistasPlanilhaWhatsapp,
+  contractIdProprio: string,
+  catalogo: ContratoAutorizadoWhatsapp[],
+): { nome: string } | null {
+  const outros = contratosCitadosNaPlanilha(pistas, catalogo)
+    .filter((c) => c.contractId !== contractIdProprio);
+  if (!outros.length) return null;
+  const nome = outros.length === 1
+    ? (outros[0].nome || outros[0].numero || outros[0].contractId)
+    : outros.map((c) => c.nome || c.contractId).join(' e ');
+  return { nome };
+}
+
+export function ehPedidoCancelarImportacao(texto: string): boolean {
+  return normFrase(texto) === 'cancelar';
+}
+
+export function textoPlanilhaRecebida(contrato: string): string {
+  const nome = String(contrato || '').trim() || 'contrato';
+  return `Planilha recebida para ${nome}. Se não for esse, responda CANCELAR em até 10 minutos.`;
+}
+
+export function textoPlanilhaOutroContrato(contrato: string): string {
+  const nome = String(contrato || '').trim() || 'outro contrato';
+  return `Esta planilha parece ser de ${nome}, em que você não está autorizado. Nada foi importado.`;
+}
+
+/** Os 10 minutos correm a partir do instante em que a importação terminou. */
+export function expiraCancelamentoAposImportacao(fimImportacaoMs: number): number {
+  return fimImportacaoMs + TTL_CANCELAR_IMPORTACAO_MS;
+}
+
+export function textoRelatorioContratoDia(contrato: string, dia: string): string {
+  const nome = String(contrato || '').trim() || 'contrato';
+  const data = String(dia || '').trim();
+  return data ? `Relatório de ${nome}, dia ${data}` : `Relatório de ${nome}`;
+}
+
+/** Só é seguro apagar o upload novo quando a importação não removeu dado anterior. */
+export function desfazimentoImportacaoSeguro(info: {
+  uploadIds?: Array<number | null | undefined> | null;
+  registrosRemovidos?: number | null;
+}): boolean {
+  const ids = (info.uploadIds || []).filter((id): id is number => Number.isInteger(id) && (id as number) > 0);
+  if (!ids.length) return false;
+  return (info.registrosRemovidos || 0) === 0;
+}
+
+export function textoAvisoGestorCancelamento(contrato: string, motivo: string): string {
+  return `CANCELAR sem desfazer (${contrato}): ${motivo}`;
+}
+
 export function decidirConversaPrivada(opts: {
   grupo: boolean;
   parecePlanilha: boolean;
@@ -311,11 +513,27 @@ export function decidirConversaPrivada(opts: {
   pendencia: PendenciaWhatsapp | null;
   agora: number;
   contratoSessao?: string | null;
+  pistasPlanilha?: PistasPlanilhaWhatsapp | null;
+  /** Contratos conhecidos, inclusive os que esta pessoa não pode usar. */
+  catalogo?: ContratoAutorizadoWhatsapp[] | null;
+  cancelamento?: CancelamentoImportacaoWhatsapp | null;
 }): DecisaoConversaPrivada {
   if (opts.grupo) return { acao: 'grupo' };
 
   const texto = String(opts.texto || '').trim();
   const norm = normalizarTextoWhatsapp(texto);
+  if (!opts.parecePlanilha && opts.cancelamento && ehPedidoCancelarImportacao(texto)) {
+    if (opts.cancelamento.expiraEm > opts.agora) {
+      return {
+        acao: 'cancelar_importacao',
+        contractId: opts.cancelamento.contractId,
+        nome: opts.cancelamento.nome,
+        uploadIds: opts.cancelamento.uploadIds,
+        desfazimentoSeguro: opts.cancelamento.desfazimentoSeguro,
+      };
+    }
+    return { acao: 'cancelar_expirado', nome: opts.cancelamento.nome };
+  }
   const pendencia = opts.pendencia;
   if (pendencia && pendencia.expiraEm <= opts.agora && pendencia.tipo === 'planilha' && !opts.parecePlanilha) {
     return { acao: 'planilha_expirada' };
@@ -345,7 +563,18 @@ export function decidirConversaPrivada(opts: {
   if (opts.parecePlanilha) {
     const lista = ativas.filter((p) => p.podeEnviarPlanilha);
     if (lista.length === 0) return { acao: 'silencio', tipo: 'planilha' };
-    if (lista.length === 1) return { acao: 'importar', contractId: lista[0].contractId };
+    if (lista.length === 1) {
+      const catalogo = opts.catalogo?.length ? opts.catalogo : opts.pessoas;
+      if (opts.pistasPlanilha && catalogo?.length) {
+        const outro = outroContratoCitadoNaPlanilha(opts.pistasPlanilha, lista[0].contractId, catalogo);
+        if (outro) return { acao: 'planilha_outro_contrato', nome: outro.nome };
+      }
+      return { acao: 'importar', contractId: lista[0].contractId };
+    }
+    if (opts.pistasPlanilha) {
+      const achado = identificarContratoPlanilha(opts.pistasPlanilha, lista);
+      if (achado) return { acao: 'importar', contractId: achado.contractId, detectado: true };
+    }
     return { acao: 'perguntar_planilha', contratos: resumo(lista) };
   }
 

@@ -60,6 +60,7 @@ import { gravarEmArquivosStorage } from './planilhaOriginalStorage';
 import { bancoDoContrato } from './tenantDatabaseService';
 import {
   gravarLidNasPessoas,
+  listarContratosDetectaveis,
   pessoasAtivasPorTelefone,
   registrarTentativaNaoAutorizada,
   telefoneDoLid,
@@ -68,13 +69,25 @@ import {
   acaoSegueProcessamento,
   consumirCotaRemetente,
   decidirConversaPrivada,
+  desfazimentoImportacaoSeguro,
   extrairIdentidadePayload,
+  expiraCancelamentoAposImportacao,
+  extrairPistasPlanilha,
+  guardarCancelamentoImportacao,
   guardarPendencia,
+  identificarContratoPlanilha,
+  limparCancelamentoImportacao,
   limparPendencia,
   mensagemDeGrupo,
+  obterCancelamentoImportacao,
   obterPendencia,
+  outroContratoCitadoNaPlanilha,
+  textoAvisoGestorCancelamento,
   textoEscolhaContrato,
+  textoPlanilhaOutroContrato,
+  textoPlanilhaRecebida,
   TTL_PLANILHA_PENDENTE_MS,
+  type CancelamentoImportacaoWhatsapp,
   type DecisaoConversaPrivada,
   type IdentidadeRemetenteWhatsapp,
 } from './whatsappConversaPrivada';
@@ -375,7 +388,27 @@ type ResultadoImportWhatsapp = {
   conferencia?: RelatorioAgenteUpload;
   /** Serviços que receberam dados (ex.: Capina + Roçada no CONSOLIDADO) */
   alvos: AlvoImportWhatsapp[];
+  /** Verdadeiro só quando apagar estes uploads não leva dado que a importação já substituiu. */
+  desfazimentoSeguro?: boolean;
 };
+
+function comSeguro(
+  resultado: ResultadoImportWhatsapp,
+  fontes: {
+    datasApagadas?: Array<{ registrosRemovidos?: number }> | null;
+    diasRemovidosAusentes?: Array<{ registrosRemovidos?: number }> | null;
+  },
+): ResultadoImportWhatsapp {
+  const registros = [...(fontes.datasApagadas || []), ...(fontes.diasRemovidosAusentes || [])]
+    .reduce((soma, item) => soma + (Number(item.registrosRemovidos) || 0), 0);
+  const ids = resultado.planilhaUploadIds?.length
+    ? resultado.planilhaUploadIds
+    : (resultado.planilhaUploadId ? [resultado.planilhaUploadId] : []);
+  return {
+    ...resultado,
+    desfazimentoSeguro: desfazimentoImportacaoSeguro({ uploadIds: ids, registrosRemovidos: registros }),
+  };
+}
 
 /**
  * Mesma lógica do upload por contrato: classifica a planilha e grava no serviço certo.
@@ -419,7 +452,7 @@ async function importarPlanilha(
       ? fraseDiasHash(r.diasAtualizados, r.diasIguais)
       : '';
     const mioloProducao = [partes.join(' · '), fraseDias, avisoDup || ''].filter(Boolean).join('. ');
-    return {
+    return comSeguro({
       planilhaUploadId: r.planilhaUploadId,
       planilhaUploadIds: idsDeUploads(r),
       importadas: r.importados,
@@ -437,7 +470,7 @@ async function importarPlanilha(
             tipo: String(servicoMapa.tipo || ''),
             importados: r.importados,
           }],
-    };
+    }, { datasApagadas: r.datasApagadas });
   }
 
   if (classificacao.tipo === 'unificado') {
@@ -459,7 +492,7 @@ async function importarPlanilha(
       }));
     const partes = alvos.map((s) => `${s.servicoNome}: ${s.importados} reg.`);
     const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
-    return {
+    return comSeguro({
       planilhaUploadId: r.planilhaUploadId,
       planilhaUploadIds: idsDeUploads(r),
       importadas: r.importados,
@@ -475,7 +508,7 @@ async function importarPlanilha(
             tipo: String(servicoMapa.tipo || ''),
             importados: r.importados,
           }],
-    };
+    }, { datasApagadas: r.datasApagadas });
   }
 
   if (classificacao.tipo === 'coleta') {
@@ -507,7 +540,11 @@ async function importarPlanilha(
     })) {
       invalidarCacheSaudeContratos(contractId);
     }
-    return {
+    const apagadosColeta = r as {
+      datasApagadas?: Array<{ registrosRemovidos?: number }>;
+      diasRemovidosAusentes?: Array<{ registrosRemovidos?: number }>;
+    };
+    return comSeguro({
       planilhaUploadId: r.planilhaUploadId,
       planilhaUploadIds: idsDeUploads(r),
       importadas: qtd,
@@ -524,7 +561,10 @@ async function importarPlanilha(
         tipo: String(alvo.tipo || TipoServico.COLETA_CAMINHAO),
         importados: qtd,
       }],
-    };
+    }, {
+      datasApagadas: apagadosColeta.datasApagadas,
+      diasRemovidosAusentes: apagadosColeta.diasRemovidosAusentes,
+    });
   }
 
   if (classificacao.tipo === 'rocada') {
@@ -532,7 +572,7 @@ async function importarPlanilha(
     const r = await RocadaImportService.importar(buffer, nomeArquivo, alvo.id, undefined, substituir);
     invalidarCacheSaudeContratos(contractId);
     const avisoDup = (r.avisos || []).find((a) => a.includes('já estavam no sistema') || a.includes('repetida'));
-    return {
+    return comSeguro({
       planilhaUploadId: r.planilhaUploadId,
       planilhaUploadIds: idsDeUploads(r),
       importadas: r.importados,
@@ -546,7 +586,7 @@ async function importarPlanilha(
         tipo: String(alvo.tipo || TipoServico.ROCADEIRA),
         importados: r.importados,
       }],
-    };
+    }, { datasApagadas: r.datasApagadas });
   }
 
   throw new Error(
@@ -695,10 +735,79 @@ function limparPendenciaRemetente(ident: IdentidadeRemetenteWhatsapp, telefoneRe
   for (const chave of chavesRemetente(ident, telefoneResolvido)) limparPendencia(chave);
 }
 
+function cancelamentoDoRemetente(ident: IdentidadeRemetenteWhatsapp, telefoneResolvido?: string | null) {
+  for (const chave of chavesRemetente(ident, telefoneResolvido)) {
+    const item = obterCancelamentoImportacao(chave);
+    if (item) return item;
+  }
+  return null;
+}
+
+function guardarCancelamentoRemetente(
+  ident: IdentidadeRemetenteWhatsapp,
+  telefoneResolvido: string | null,
+  item: CancelamentoImportacaoWhatsapp,
+): void {
+  for (const chave of chavesRemetente(ident, telefoneResolvido)) guardarCancelamentoImportacao(chave, item);
+}
+
+function limparCancelamentoRemetente(ident: IdentidadeRemetenteWhatsapp, telefoneResolvido?: string | null): void {
+  for (const chave of chavesRemetente(ident, telefoneResolvido)) limparCancelamentoImportacao(chave);
+}
+
+async function avisarGestorCancelamento(chat: string, contrato: string, motivo: string): Promise<void> {
+  const texto = textoAvisoGestorCancelamento(contrato, motivo);
+  console.warn(`[WhatsappPipeline] ${texto}`);
+  registrarRecebimentoWhatsapp({
+    grupoJid: chat,
+    nomeGrupo: null,
+    tipo: 'planilha',
+    resumo: texto.slice(0, 180),
+  });
+}
+
+async function desfazerImportacaoDetectada(
+  chat: string,
+  nome: string,
+  uploadIds: number[],
+  seguro: boolean,
+): Promise<{ processado: boolean; motivo: string }> {
+  if (!seguro) {
+    await avisarGestorCancelamento(chat, nome, 'a importação substituiu dados anteriores');
+    await avisarChatWhatsapp(
+      chat,
+      `Não desfiz a importação de ${nome}: ela substituiu dados que já estavam no contrato. Avisei o gestor e nada foi apagado.`,
+    );
+    return { processado: true, motivo: 'cancelar-sem-desfazer' };
+  }
+  let desfeitos = 0;
+  try {
+    for (const id of uploadIds) {
+      await PlanilhaService.excluirUpload(id);
+      desfeitos += 1;
+    }
+  } catch (err: any) {
+    await avisarGestorCancelamento(chat, nome, err?.message || 'falha ao excluir o upload');
+    await avisarChatWhatsapp(
+      chat,
+      desfeitos === 0
+        ? `Não consegui desfazer a importação de ${nome}. Avisei o gestor e nada foi apagado.`
+        : `Desfiz parte da importação de ${nome} e parei no restante. Avisei o gestor.`,
+    );
+    return { processado: true, motivo: 'cancelar-falhou' };
+  }
+  await avisarChatWhatsapp(chat, `Cancelei a importação de ${nome}.`);
+  return { processado: true, motivo: 'importacao-cancelada' };
+}
+
 async function montarDecisaoPrivada(
   payload: WuzapiWebhookPayload,
   ident: IdentidadeRemetenteWhatsapp,
-): Promise<{ decisao: DecisaoConversaPrivada; telefone: string | null }> {
+): Promise<{
+  decisao: DecisaoConversaPrivada;
+  telefone: string | null;
+  pessoas: Awaited<ReturnType<typeof pessoasAtivasPorTelefone>>;
+}> {
   let telefone = ident.telefone;
   if (!telefone && ident.lid) {
     try {
@@ -727,6 +836,7 @@ async function montarDecisaoPrivada(
   const chat = ident.chat || String(payload.event?.Info?.Chat || '');
   return {
     telefone,
+    pessoas,
     decisao: decidirConversaPrivada({
       grupo: false,
       parecePlanilha,
@@ -736,6 +846,7 @@ async function montarDecisaoPrivada(
       pendencia: pendenciaDoRemetente(ident, telefone),
       agora: Date.now(),
       contratoSessao: contratoDaSessaoComando(chat),
+      cancelamento: cancelamentoDoRemetente(ident, telefone),
     }),
   };
 }
@@ -930,11 +1041,39 @@ export class WhatsappPlanilhaPipelineService {
       await avisarChatWhatsapp(chat, 'Você não está autorizado a pedir relatório desse contrato.');
       return { processado: true, motivo: 'contrato-nao-autorizado' };
     }
+    if (decisao.acao === 'planilha_outro_contrato') {
+      await avisarChatWhatsapp(chat, textoPlanilhaOutroContrato(decisao.nome));
+      return { processado: true, motivo: 'planilha-outro-contrato' };
+    }
+    if (decisao.acao === 'cancelar_expirado') {
+      limparCancelamentoRemetente(ident, telefone);
+      await avisarChatWhatsapp(chat, `O prazo de 10 minutos para cancelar passou. A importação de ${decisao.nome} permanece.`);
+      return { processado: true, motivo: 'cancelar-expirado' };
+    }
+    if (decisao.acao === 'cancelar_importacao') {
+      limparCancelamentoRemetente(ident, telefone);
+      return noContrato(decisao.contractId, () => desfazerImportacaoDetectada(
+        chat,
+        decisao.nome,
+        decisao.uploadIds,
+        decisao.desfazimentoSeguro,
+      ));
+    }
     if (decisao.acao === 'perguntar_planilha') {
       const anterior = pendenciaDoRemetente(ident, telefone);
       if (anterior?.caminho) await apagarArquivoPendente(anterior.caminho);
       const { doc } = extrairDocumento(payload);
       const { buffer, nomeArquivo } = await obterBufferPlanilha(payload, doc);
+      const achado = identificarContratoPlanilha(extrairPistasPlanilha(buffer, nomeArquivo), montada.pessoas);
+      if (achado && decisao.contratos.some((c) => c.contractId === achado.contractId)) {
+        return noContrato(achado.contractId, () => this.importarNoContrato(
+          achado.contractId,
+          buffer,
+          nomeArquivo,
+          chat,
+          { detectado: true, nomeContrato: achado.nome, ident, telefone },
+        ));
+      }
       const caminho = `whatsapp/pendente/${(telefone || ident.chave).replace(/[^\w.-]/g, '')}-${Date.now()}.xlsx`;
       await gravarEmArquivosStorage(
         caminho,
@@ -997,7 +1136,25 @@ export class WhatsappPlanilhaPipelineService {
         buffer = baixado.buffer;
         nomeArquivo = baixado.nomeArquivo;
       }
-      return noContrato(contractId, () => this.importarNoContrato(contractId, buffer, nomeArquivo, chat));
+      const detectado = decisao.acao === 'importar' && decisao.detectado === true;
+      if (!detectado) {
+        const outro = outroContratoCitadoNaPlanilha(
+          extrairPistasPlanilha(buffer, nomeArquivo),
+          contractId,
+          await listarContratosDetectaveis(),
+        );
+        if (outro) {
+          await avisarChatWhatsapp(chat, textoPlanilhaOutroContrato(outro.nome));
+          return { processado: true, motivo: 'planilha-outro-contrato' };
+        }
+      }
+      return noContrato(contractId, () => this.importarNoContrato(
+        contractId,
+        buffer,
+        nomeArquivo,
+        chat,
+        detectado ? { detectado: true, ident, telefone } : undefined,
+      ));
     }
 
     limparPendenciaRemetente(ident, telefone);
@@ -1009,6 +1166,12 @@ export class WhatsappPlanilhaPipelineService {
     buffer: Buffer,
     nomeArquivo: string,
     chat: string,
+    opts?: {
+      detectado?: boolean;
+      nomeContrato?: string;
+      ident?: IdentidadeRemetenteWhatsapp;
+      telefone?: string | null;
+    },
   ): Promise<{ processado: boolean; motivo?: string; resultado?: Record<string, unknown> }> {
     const ctx = await contextoDoContrato(contractId);
     if (!ctx) return { processado: false, motivo: 'Contrato sem serviço para importar a planilha' };
@@ -1016,12 +1179,28 @@ export class WhatsappPlanilhaPipelineService {
       return { processado: false, motivo: 'WuzAPI não configurada (WUZAPI_URL/WUZAPI_TOKEN)' };
     }
     const nome = EXT_PLANILHA.test(nomeArquivo) ? nomeArquivo : `${nomeArquivo.replace(/\.[^.]+$/, '') || 'planilha'}.xlsx`;
-    await avisarChatWhatsapp(chat, `Recebi a planilha *${nome}*. Estou importando. Pode levar alguns minutos.`);
+    const nomeContrato = ctx.contrato?.numeroContrato || opts?.nomeContrato || 'contrato';
+    if (!opts?.detectado) {
+      await avisarChatWhatsapp(chat, `Recebi a planilha *${nome}*. Estou importando. Pode levar alguns minutos.`);
+    }
     const importResult = await importarPlanilha(buffer, nome, ctx.servico, 'atualizar_data');
     const idsUpload = importResult.planilhaUploadIds?.length
       ? importResult.planilhaUploadIds
       : (importResult.planilhaUploadId ? [importResult.planilhaUploadId] : []);
     for (const id of idsUpload) await marcarOrigemPlanilhaUpload(id, 'whatsapp');
+    if (opts?.detectado) {
+      const expiraEm = expiraCancelamentoAposImportacao(Date.now());
+      await avisarChatWhatsapp(chat, textoPlanilhaRecebida(nomeContrato));
+      if (opts.ident) {
+        guardarCancelamentoRemetente(opts.ident, opts.telefone ?? null, {
+          expiraEm,
+          contractId,
+          nome: nomeContrato,
+          uploadIds: idsUpload.filter((id) => id > 0),
+          desfazimentoSeguro: importResult.desfazimentoSeguro === true,
+        });
+      }
+    }
     try {
       await gravarAlertasArquivoEm(idsUpload, buffer);
     } catch (err: any) {

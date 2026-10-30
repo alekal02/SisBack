@@ -16,6 +16,7 @@ import {
   recortarPeriodoAteReferencia,
 } from '../utils/periodoCicloContrato';
 import PlanilhaService from './PlanilhaService';
+import { textoRelatorioContratoDia } from './whatsappConversaPrivada';
 import { htmlToPdf } from './PdfGeneratorService';
 import wuzapiService from './WuzapiService';
 import {
@@ -491,26 +492,27 @@ async function gerarEEnviarDia(
   const contratoNome = contrato?.numeroContrato || 'este contrato';
   const filtroTxt = tipoFiltro ? ` (${labelTipoServico(tipoFiltro)})` : '';
   const umSo = alvo.length === 1;
+  const fraseDia = (dia: string) => textoRelatorioContratoDia(contratoNome, isoParaBr(dia));
 
   if (alvo.length === 0) {
     await wuzapiService.enviarTexto(
       grupoJid,
       dataIsoPedido
-        ? `⚠️ ${umSo || ids.length ? 'Este serviço' : `Varredura em *${contratoNome}*${filtroTxt}`} não operou em *${isoParaBr(dataIsoPedido)}*.`
-        : `⚠️ Nenhum serviço com dados${filtroTxt}. Envie a planilha ou escolha outra data (*dia 16/09*).`,
+        ? `⚠️ ${fraseDia(dataIsoPedido)}: não houve operação nesse dia.`
+        : `⚠️ Relatório de ${contratoNome}: nenhum serviço com dados${filtroTxt}. Envie a planilha ou escolha outra data (*dia 16/09*).`,
     );
     return;
   }
 
   if (!umSo) {
-    const linhasScan = alvo.map((s) => `• *${s.servico.nome}* — ${s.tipoLabel} · ${isoParaBr(s.dataIso)}`);
+    const linhasScan = alvo.map((s) => `• ${fraseDia(s.dataIso)} — ${s.servico.nome}`);
     const semTxt = !ids.length && semDados.length
       ? `\nSem dado${dataIsoPedido ? ` em ${isoParaBr(dataIsoPedido)}` : ''}: ${semDados.map((s) => s.nome).join(', ')}`
       : '';
     await wuzapiService.enviarTexto(
       grupoJid,
       [
-        `🔎 Varredura de *${contratoNome}*${filtroTxt}`,
+        dataIsoPedido ? fraseDia(dataIsoPedido) : `Relatório de ${contratoNome}`,
         '',
         `Encontrei *${alvo.length}* serviço(s). Gerando o diário:`,
         ...linhasScan,
@@ -520,7 +522,7 @@ async function gerarEEnviarDia(
   } else {
     await wuzapiService.enviarTexto(
       grupoJid,
-      `⏳ Relatório diário de *${alvo[0].servico.nome}* (${isoParaBr(alvo[0].dataIso)})…`,
+      `${fraseDia(alvo[0].dataIso)}.`,
     );
   }
 
@@ -541,7 +543,7 @@ async function gerarEEnviarDia(
         grupoJid,
         gerado.nomeArquivo,
         pdf,
-        `${item.servico.nome} — ${isoParaBr(item.dataIso)}`,
+        `${fraseDia(item.dataIso)} — ${item.servico.nome}`,
       );
       enviados += 1;
     } catch (err: any) {

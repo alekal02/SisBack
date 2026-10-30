@@ -1,17 +1,29 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import whatsappPlanilhaPipeline from './WhatsappPlanilhaPipelineService';
+import * as XLSX from 'xlsx';
 import {
   avaliarLimiteRemetente,
   citarContratoNoTexto,
   consumirCotaRemetente,
   decidirConversaPrivada,
+  desfazimentoImportacaoSeguro,
+  ehPedidoCancelarImportacao,
+  expiraCancelamentoAposImportacao,
   extrairIdentidadePayload,
+  extrairPistasPlanilha,
+  identificarContratoPlanilha,
   limparCotaRemetente,
   limparPendenciasWhatsapp,
   mensagemDeGrupo,
   telefoneDeRespostaLid,
+  textoPlanilhaOutroContrato,
+  textoPlanilhaRecebida,
+  textoRelatorioContratoDia,
   validarTelefoneComDdi,
+  type CancelamentoImportacaoWhatsapp,
   type ContratoAutorizadoWhatsapp,
   type PendenciaWhatsapp,
 } from './whatsappConversaPrivada';
@@ -205,5 +217,218 @@ describe('WhatsApp privado — autorização, contratos e planilha pendente', ()
     assert.equal(estourado.permitido, false);
     limparCotaRemetente();
     limparPendenciasWhatsapp();
+  });
+});
+
+const GOIANIA: ContratoAutorizadoWhatsapp = {
+  contractId: 'c-goiania',
+  nome: 'Aparecida de Goiânia',
+  numero: '045/2024',
+  podeEnviarPlanilha: true,
+  podePedirRelatorio: true,
+};
+
+const UNAI: ContratoAutorizadoWhatsapp = {
+  contractId: 'c-unai',
+  nome: 'Unaí',
+  numero: '099/2024',
+  podeEnviarPlanilha: false,
+  podePedirRelatorio: true,
+};
+
+function bufferPlanilha(abas: Array<{ nome: string; linhas: unknown[][] }>): Buffer {
+  const wb = XLSX.utils.book_new();
+  for (const aba of abas) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aba.linhas), aba.nome);
+  }
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}
+
+describe('WhatsApp privado — contrato lido na planilha', () => {
+  const autorizados = [GOIANIA, CENTRO, UNAI];
+
+  it('reconhece o nome completo no arquivo e ignora palavra solta', () => {
+    const buffer = bufferPlanilha([
+      { nome: 'CONSOLIDADO', linhas: [['SERVIÇO', 'DATA', 'QUANTIDADE'], ['Varrição', '16/09/2026', 10]] },
+    ]);
+    const pistas = extrairPistasPlanilha(buffer, 'PRODUÇÃO - APARECIDA DE GOIÂNIA.xlsx');
+    const achado = identificarContratoPlanilha(pistas, autorizados);
+    assert.equal(achado?.contractId, 'c-goiania');
+
+    const solta = extrairPistasPlanilha(buffer, 'PRODUÇÃO - APARECIDA.xlsx');
+    assert.equal(identificarContratoPlanilha(solta, autorizados), null);
+
+    const decisao = decidir({ parecePlanilha: true, pessoas: autorizados, pistasPlanilha: pistas });
+    assert.equal(decisao.acao, 'importar');
+    assert.equal((decisao as { contractId: string }).contractId, 'c-goiania');
+    assert.equal((decisao as { detectado?: boolean }).detectado, true);
+  });
+
+  it('Centro no cabeçalho não decide sozinho', () => {
+    const pistas = extrairPistasPlanilha(
+      bufferPlanilha([{
+        nome: 'Coleta',
+        linhas: [['PLANILHA PRODUTIVIDADE COLETA'], ['Centro', 'PLACA', 'PESO TOTAL']],
+      }]),
+      'envio.xlsx',
+    );
+    assert.equal(identificarContratoPlanilha(pistas, autorizados), null);
+    assert.equal(decidir({ parecePlanilha: true, pessoas: autorizados, pistasPlanilha: pistas }).acao, 'perguntar_planilha');
+  });
+
+  it('reconhece a filial só no cabeçalho, com acento', () => {
+    const buffer = bufferPlanilha([
+      {
+        nome: 'Coleta',
+        linhas: [
+          ['PLANILHA PRODUTIVIDADE COLETA'],
+          ['Filial: Aparecida de Goiânia'],
+          ['PLACA', 'PESO TOTAL', 'MOTORISTA'],
+        ],
+      },
+    ]);
+    const pistas = extrairPistasPlanilha(buffer, 'envio.xlsx');
+    assert.equal(identificarContratoPlanilha(pistas, autorizados)?.contractId, 'c-goiania');
+
+    const peloNumero = extrairPistasPlanilha(
+      bufferPlanilha([{ nome: 'Coleta', linhas: [['PLANILHA PRODUTIVIDADE COLETA'], ['Contrato 045/2024']] }]),
+      'envio.xlsx',
+    );
+    assert.equal(identificarContratoPlanilha(peloNumero, autorizados)?.contractId, 'c-goiania');
+  });
+
+  it('pergunta quando o arquivo cita mais de um contrato ou nenhum', () => {
+    const ambigua = extrairPistasPlanilha(
+      bufferPlanilha([{ nome: 'CONSOLIDADO', linhas: [['PRODUÇÃO - APARECIDA E CENTRO']] }]),
+      'planilha.xlsx',
+    );
+    assert.equal(identificarContratoPlanilha(ambigua, autorizados), null);
+    assert.equal(decidir({ parecePlanilha: true, pessoas: autorizados, pistasPlanilha: ambigua }).acao, 'perguntar_planilha');
+
+    const semPista = extrairPistasPlanilha(
+      bufferPlanilha([{ nome: 'CONSOLIDADO', linhas: [['SERVIÇO', 'DATA']] }]),
+      'planilha.xlsx',
+    );
+    assert.equal(decidir({ parecePlanilha: true, pessoas: [APARECIDA, CENTRO], pistasPlanilha: semPista }).acao, 'perguntar_planilha');
+  });
+
+  it('não importa em contrato sem permissão de enviar planilha', () => {
+    const buffer = bufferPlanilha([
+      { nome: 'CONSOLIDADO', linhas: [['PRODUÇÃO - UNAÍ']] },
+    ]);
+    const pistas = extrairPistasPlanilha(buffer, 'PRODUÇÃO - UNAÍ.xlsx');
+    assert.equal(identificarContratoPlanilha(pistas, autorizados), null);
+    assert.notEqual(identificarContratoPlanilha(pistas, autorizados)?.contractId, 'c-unai');
+
+    const soNaoAutorizado = identificarContratoPlanilha(pistas, [UNAI]);
+    assert.equal(soNaoAutorizado, null);
+    assert.equal(decidir({ parecePlanilha: true, pessoas: [UNAI], pistasPlanilha: pistas }).acao, 'silencio');
+
+    const decisao = decidir({ parecePlanilha: true, pessoas: autorizados, pistasPlanilha: pistas });
+    assert.equal(decisao.acao, 'perguntar_planilha');
+    const ids = (decisao as { contratos: Array<{ contractId: string }> }).contratos.map((c) => c.contractId);
+    assert.deepEqual(ids, ['c-goiania', 'c-centro']);
+  });
+
+  it('não importa quando a pessoa tem um contrato e a planilha cita outro', () => {
+    const deGoiania = extrairPistasPlanilha(
+      bufferPlanilha([{ nome: 'Coleta', linhas: [['Filial: Aparecida de Goiânia'], ['PLACA']] }]),
+      'envio.xlsx',
+    );
+    const bloqueio = decidir({
+      parecePlanilha: true,
+      pessoas: [CENTRO],
+      pistasPlanilha: deGoiania,
+      catalogo: [CENTRO, GOIANIA, UNAI],
+    });
+    assert.equal(bloqueio.acao, 'planilha_outro_contrato');
+    assert.equal(
+      textoPlanilhaOutroContrato((bloqueio as { nome: string }).nome),
+      'Esta planilha parece ser de Aparecida de Goiânia, em que você não está autorizado. Nada foi importado.',
+    );
+
+    const peloNumero = extrairPistasPlanilha(
+      bufferPlanilha([{ nome: 'Coleta', linhas: [['Contrato 099/2024']] }]),
+      'envio.xlsx',
+    );
+    const porNumero = decidir({
+      parecePlanilha: true,
+      pessoas: [GOIANIA],
+      pistasPlanilha: peloNumero,
+      catalogo: [GOIANIA, UNAI],
+    });
+    assert.equal(porNumero.acao, 'planilha_outro_contrato');
+    assert.equal((porNumero as { nome: string }).nome, 'Unaí');
+
+    const semCitacao = extrairPistasPlanilha(
+      bufferPlanilha([{ nome: 'CONSOLIDADO', linhas: [['SERVIÇO', 'DATA', 'Centro']] }]),
+      'planilha.xlsx',
+    );
+    const segue = decidir({
+      parecePlanilha: true,
+      pessoas: [GOIANIA],
+      pistasPlanilha: semCitacao,
+      catalogo: [GOIANIA, UNAI, CENTRO],
+    });
+    assert.equal(segue.acao, 'importar');
+    assert.equal((segue as { contractId: string }).contractId, 'c-goiania');
+  });
+
+  it('o prazo de CANCELAR começa no fim da importação', () => {
+    const inicio = 1_000_000;
+    const fim = inicio + 8 * 60 * 1000;
+    assert.equal(expiraCancelamentoAposImportacao(fim), fim + 10 * 60 * 1000);
+    assert.ok(expiraCancelamentoAposImportacao(fim) > inicio + 10 * 60 * 1000);
+
+    const src = readFileSync(path.join(__dirname, 'WhatsappPlanilhaPipelineService.ts'), 'utf8');
+    const importacao = src.indexOf("await importarPlanilha(buffer, nome, ctx.servico, 'atualizar_data')");
+    const aviso = src.indexOf('textoPlanilhaRecebida(nomeContrato)');
+    const prazo = src.indexOf('expiraCancelamentoAposImportacao(Date.now())');
+    assert.ok(importacao > 0);
+    assert.ok(prazo > importacao);
+    assert.ok(aviso > importacao);
+  });
+
+  it('desfaz só a importação que não substituiu dado anterior e aceita CANCELAR por 10 minutos', () => {
+    assert.equal(desfazimentoImportacaoSeguro({ uploadIds: [12], registrosRemovidos: 0 }), true);
+    assert.equal(desfazimentoImportacaoSeguro({ uploadIds: [12], registrosRemovidos: 4 }), false);
+    assert.equal(desfazimentoImportacaoSeguro({ uploadIds: [], registrosRemovidos: 0 }), false);
+    assert.equal(ehPedidoCancelarImportacao('CANCELAR'), true);
+    assert.equal(ehPedidoCancelarImportacao('cancelar a planilha'), false);
+    assert.equal(
+      textoPlanilhaRecebida('Aparecida de Goiânia'),
+      'Planilha recebida para Aparecida de Goiânia. Se não for esse, responda CANCELAR em até 10 minutos.',
+    );
+    assert.equal(textoRelatorioContratoDia('Aparecida de Goiânia', '16/09/2026'), 'Relatório de Aparecida de Goiânia, dia 16/09/2026');
+
+    const agora = 1_000_000;
+    const cancelamento: CancelamentoImportacaoWhatsapp = {
+      expiraEm: agora + 10 * 60 * 1000,
+      contractId: 'c-goiania',
+      nome: 'Aparecida de Goiânia',
+      uploadIds: [12],
+      desfazimentoSeguro: true,
+    };
+    const noPrazo = decidir({ texto: 'CANCELAR', textoMerece: true, agora, cancelamento, pessoas: autorizados });
+    assert.equal(noPrazo.acao, 'cancelar_importacao');
+    assert.equal((noPrazo as { desfazimentoSeguro: boolean }).desfazimentoSeguro, true);
+
+    const tarde = decidir({
+      texto: 'cancelar',
+      textoMerece: true,
+      agora,
+      cancelamento: { ...cancelamento, expiraEm: agora - 1 },
+      pessoas: autorizados,
+    });
+    assert.equal(tarde.acao, 'cancelar_expirado');
+
+    const relatorio = decidir({
+      texto: 'dia 16/09',
+      textoMerece: true,
+      agora,
+      cancelamento,
+      pessoas: [GOIANIA],
+    });
+    assert.equal(relatorio.acao, 'relatorio');
   });
 });
