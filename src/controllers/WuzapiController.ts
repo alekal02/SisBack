@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import AppDataSource from '../database/data-source';
 import { WhatsappGrupoMapa } from '../entities/WhatsappGrupoMapa';
 import { Servico } from '../entities/Servico';
-import wuzapiService from '../services/WuzapiService';
+import wuzapiService, { redigirSegredos } from '../services/WuzapiService';
 import whatsappPlanilhaPipeline from '../services/WhatsappPlanilhaPipelineService';
 import {
   removerRoteamentoWhatsapp,
@@ -19,13 +19,6 @@ import {
   urlSemSegredoWebhook,
   webhookHmacDeveRecusar,
 } from '../services/wuzapiWebhookAuth';
-
-function sessaoSemSegredo<T extends { webhook?: string; Webhook?: string }>(sessao: T): T {
-  const copia = { ...sessao };
-  if (typeof copia.webhook === 'string') copia.webhook = urlSemSegredoWebhook(copia.webhook);
-  if (typeof copia.Webhook === 'string') copia.Webhook = urlSemSegredoWebhook(copia.Webhook);
-  return copia;
-}
 
 export class WuzapiController {
   /**
@@ -85,15 +78,21 @@ export class WuzapiController {
     }
   }
 
-  /** GET /api/wuzapi/status — inclui QR quando conectado e ainda não logado */
+  /** GET /api/wuzapi/status — só a instância gravada no banco; sem token e sem número cru */
   async status(_req: Request, res: Response): Promise<void> {
     try {
+      const tela = await wuzapiService.consultarParaTela();
       const base = {
         configurado: wuzapiService.isConfigured,
         url: process.env.WUZAPI_URL || null,
-        tokenExiste: !!process.env.WUZAPI_TOKEN,
+        tokenExiste: tela.instanciaPropria,
         webhookSecretExiste: !!process.env.WUZAPI_WEBHOOK_SECRET,
         webhookUrl: urlSemSegredoWebhook(wuzapiService.webhookUrl),
+        nomeInstancia: tela.nomeInstancia,
+        instanciaPropria: tela.instanciaPropria,
+        statusConexao: tela.statusConexao,
+        numeroMascarado: tela.numeroMascarado,
+        alertaWebhook: tela.alertaWebhook,
       };
       if (!wuzapiService.isConfigured) {
         res.json({
@@ -102,52 +101,38 @@ export class WuzapiController {
           qrCode: null,
           conectado: false,
           logado: false,
-          mensagem: 'Configure WUZAPI_URL e WUZAPI_TOKEN',
+          statusConexao: 'deslogado',
+          mensagem: 'Configure WUZAPI_URL no .env',
         });
         return;
       }
-      try {
-        const sessao = await wuzapiService.getStatus();
-        let qrCode: string | null = null;
-        if (sessao.connected && !sessao.loggedIn) {
-          try {
-            const qr = await wuzapiService.getQRCode();
-            qrCode = qr.qrCode || null;
-            // Garante data URI para <img src>
-            if (qrCode && !qrCode.startsWith('data:')) {
-              qrCode = `data:image/png;base64,${qrCode}`;
-            }
-          } catch {
-            qrCode = null;
+      let qrCode: string | null = null;
+      if (tela.instanciaPropria && tela.connected && !tela.loggedIn) {
+        try {
+          const qr = await wuzapiService.getQRCode();
+          qrCode = qr.qrCode || null;
+          if (qrCode && !qrCode.startsWith('data:')) {
+            qrCode = `data:image/png;base64,${qrCode}`;
           }
+        } catch {
+          qrCode = null;
         }
-        res.json({
-          ...base,
-          sessao: sessaoSemSegredo(sessao),
-          qrCode,
-          conectado: sessao.connected,
-          logado: sessao.loggedIn,
-        });
-      } catch (err: any) {
-        const erroSessao = err?.message || 'Falha ao consultar sessão';
-        // 401 = token ainda sem usuário → WuzAPI online, só falta Connect criar instância
-        const offline = /ECONNREFUSED|inacess[ií]vel|ENOTFOUND|EHOSTUNREACH/i.test(String(erroSessao));
-        res.json({
-          ...base,
-          sessao: null,
-          qrCode: null,
-          conectado: false,
-          logado: false,
-          erroSessao,
-          wuzapiOffline: offline,
-          wuzapiOnline: !offline,
-          mensagem: offline
-            ? 'WuzAPI offline. Suba: docker compose up -d wuzapi-db wuzapi'
-            : undefined,
-        });
       }
+      res.json({
+        ...base,
+        sessao: null,
+        qrCode,
+        conectado: tela.connected,
+        logado: tela.loggedIn,
+        erroSessao: tela.erroSessao ? redigirSegredos(tela.erroSessao) : undefined,
+        wuzapiOffline: tela.offline,
+        wuzapiOnline: !tela.offline,
+        mensagem: tela.offline
+          ? 'WuzAPI offline. Suba: docker compose up -d wuzapi-db wuzapi'
+          : undefined,
+      });
     } catch (error: any) {
-      res.status(500).json({ sucesso: false, erro: error?.message || 'Erro' });
+      res.status(500).json({ sucesso: false, erro: redigirSegredos(error?.message || 'Erro') });
     }
   }
 
@@ -162,30 +147,31 @@ export class WuzapiController {
         return;
       }
       const resultado = await wuzapiService.conectarSessao();
-      // Aguarda um pouco e tenta obter QR (também quando já estava connected)
       let qrCode: string | null = null;
-      try {
-        await new Promise((r) => setTimeout(r, 1200));
-        const st = await wuzapiService.getStatus();
-        if (!st.loggedIn) {
+      if (!resultado.logado) {
+        try {
+          await new Promise((r) => setTimeout(r, 1200));
           const qr = await wuzapiService.getQRCode();
           qrCode = qr.qrCode || null;
           if (qrCode && !qrCode.startsWith('data:')) {
             qrCode = `data:image/png;base64,${qrCode}`;
           }
-        }
-      } catch { /* QR pode demorar */ }
+        } catch { /* QR pode demorar */ }
+      }
 
       res.json({
         sucesso: true,
         message: resultado.message,
-        jid: resultado.jid,
         qrCode,
-        conectado: true,
-        logado: false,
+        conectado: resultado.connected,
+        logado: resultado.logado,
+        nomeInstancia: resultado.nomeInstancia,
+        numeroMascarado: resultado.numeroMascarado,
+        statusConexao: resultado.statusConexao,
+        alertaWebhook: resultado.alertaWebhook,
       });
     } catch (error: any) {
-      const msg = String(error?.message || 'Erro ao conectar');
+      const msg = redigirSegredos(String(error?.message || 'Erro ao conectar'));
       const offline = /ECONNREFUSED|inacess[ií]vel|ENOTFOUND|EHOSTUNREACH/i.test(msg);
       res.status(offline ? 503 : 500).json({
         sucesso: false,
@@ -216,7 +202,7 @@ export class WuzapiController {
         qrCode: null,
       });
     } catch (error: any) {
-      const msg = String(error?.message || 'Erro ao desconectar');
+      const msg = redigirSegredos(String(error?.message || 'Erro ao desconectar'));
       const offline = /ECONNREFUSED|inacess[ií]vel|ENOTFOUND|EHOSTUNREACH/i.test(msg);
       res.status(offline ? 503 : 500).json({
         sucesso: false,
@@ -228,11 +214,54 @@ export class WuzapiController {
     }
   }
 
-  /** GET /api/wuzapi/qr — QR atual */
+  /** POST /api/wuzapi/nova-conexao — nova instância própria; só apaga a anterior do Sistemma */
+  async novaConexao(req: Request, res: Response): Promise<void> {
+    try {
+      if (!process.env.WUZAPI_URL?.trim()) {
+        res.status(400).json({ sucesso: false, erro: 'WuzAPI não configurada. Defina WUZAPI_URL no .env' });
+        return;
+      }
+      const resultado = await wuzapiService.gerarNovaConexao({
+        confirmacao: req.body?.confirmacao,
+      });
+      let qrCode: string | null = null;
+      if (!resultado.logado) {
+        try {
+          await new Promise((r) => setTimeout(r, 1200));
+          const qr = await wuzapiService.getQRCode();
+          qrCode = qr.qrCode || null;
+          if (qrCode && !qrCode.startsWith('data:')) {
+            qrCode = `data:image/png;base64,${qrCode}`;
+          }
+        } catch { /* QR pode demorar */ }
+      }
+      res.json({
+        sucesso: true,
+        message: resultado.message,
+        qrCode,
+        conectado: resultado.connected,
+        logado: resultado.logado,
+        nomeInstancia: resultado.nomeInstancia,
+        numeroMascarado: resultado.numeroMascarado,
+        statusConexao: resultado.statusConexao,
+        alertaWebhook: resultado.alertaWebhook,
+      });
+    } catch (error: any) {
+      const msg = redigirSegredos(String(error?.message || 'Erro ao gerar nova conexão'));
+      const recusa = /NOVA CONEXAO/.test(msg);
+      res.status(recusa ? 400 : 500).json({ sucesso: false, erro: msg });
+    }
+  }
+
+  /** GET /api/wuzapi/qr — QR da instância própria */
   async qr(_req: Request, res: Response): Promise<void> {
     try {
       if (!wuzapiService.isConfigured) {
         res.status(400).json({ sucesso: false, erro: 'WuzAPI não configurada' });
+        return;
+      }
+      if (!(await wuzapiService.temInstanciaPropria())) {
+        res.status(400).json({ sucesso: false, erro: 'Não há instância própria do Sistemma. Clique em Conectar.' });
         return;
       }
       const qr = await wuzapiService.getQRCode();
@@ -242,7 +271,7 @@ export class WuzapiController {
       }
       res.json({ sucesso: true, qrCode });
     } catch (error: any) {
-      res.status(500).json({ sucesso: false, erro: error?.message || 'Erro ao obter QR' });
+      res.status(500).json({ sucesso: false, erro: redigirSegredos(error?.message || 'Erro ao obter QR') });
     }
   }
 
@@ -251,6 +280,10 @@ export class WuzapiController {
     try {
       if (!wuzapiService.isConfigured) {
         res.status(400).json({ error: 'WuzAPI não configurada' });
+        return;
+      }
+      if (!(await wuzapiService.temInstanciaPropria())) {
+        res.status(400).json({ error: 'Não há instância própria do Sistemma. Clique em Conectar.' });
         return;
       }
       const st = await wuzapiService.getStatus();

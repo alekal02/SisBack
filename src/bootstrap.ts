@@ -15,6 +15,7 @@ import { migrateWhatsappPdfSobDemanda } from './database/migrate_whatsapp_pdf_so
 import { migrateArquivosStorage } from './database/migrate_arquivos_storage';
 import { migrateImportacaoDiaHash } from './database/migrate_importacao_dia_hash';
 import { migrateImportacaoLinhaIgnorada } from './database/migrate_importacao_linha_ignorada';
+import { migrateWhatsappInstancia } from './database/migrate_whatsapp_instancia';
 import { migrateExecutivoCache } from './database/migrate_executivo_cache';
 import { sincronizarKpisUniversaisBiblioteca } from './database/sincronizarKpisUniversaisBiblioteca';
 import { iniciarAgendamentoWarmupExecutivo } from './services/executivoCacheWarmupService';
@@ -26,17 +27,22 @@ import { iniciarMonitorEventLoop } from './services/eventLoopMonitor';
 
 /** A sessão já conectada guarda a URL antiga. Sem isso o chatbot fica mudo depois do deploy. */
 async function garantirWebhookWuzapi(): Promise<void> {
-  if (!wuzapiService.isConfigured) return;
+  if (!process.env.WUZAPI_URL?.trim()) return;
   if (!wuzapiService.webhookUrl) {
     console.warn('[Wuzapi] WUZAPI_WEBHOOK_URL ausente. O webhook da sessão não foi alterado.');
     return;
   }
+  if (!(await wuzapiService.temInstanciaPropria())) {
+    console.log('[Wuzapi] Sem instância própria ativa. Nenhum webhook de outra instância foi alterado.');
+    return;
+  }
   try {
-    await wuzapiService.configurarWebhook(
+    const resultado = await wuzapiService.configurarWebhook(
       wuzapiService.webhookUrl,
       ['Message', 'Connected', 'QR'],
     );
-    console.log(`[Wuzapi] Webhook da sessão: ${urlSemSegredoWebhook(wuzapiService.webhookUrl)}`);
+    if (resultado.alerta) console.warn(`[Wuzapi] ${resultado.alerta}`);
+    else console.log(`[Wuzapi] Webhook da sessão: ${urlSemSegredoWebhook(wuzapiService.webhookUrl)}`);
   } catch (err) {
     console.warn('[Wuzapi] Não foi possível renovar o webhook:', (err as Error)?.message || err);
   }
@@ -186,6 +192,14 @@ async function aquecerAplicacao(): Promise<void> {
   try {
     await AppDataSource.initialize();
     console.log('✅ Banco de dados conectado com sucesso');
+
+    if (process.env.SKIP_STARTUP_MIGRATIONS !== 'true') {
+      try {
+        await migrateWhatsappInstancia();
+      } catch (err) {
+        console.error('⚠️ Erro na migration de whatsapp_instancia:', (err as Error)?.message || err);
+      }
+    }
 
     if (process.env.NODE_ENV === 'production' && !String(process.env.WUZAPI_WEBHOOK_SECRET || '').trim()) {
       console.warn(

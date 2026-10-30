@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { WuzapiController } from '../controllers/WuzapiController';
-import { authenticate } from '../middlewares/authMiddleware';
+import { authenticate, authorize } from '../middlewares/authMiddleware';
 
 const router = Router();
 const controller = new WuzapiController();
@@ -10,6 +10,7 @@ router.post('/webhook', (req, res) => controller.webhook(req, res));
 
 router.get('/status', authenticate, (req, res) => controller.status(req, res));
 router.post('/connect', authenticate, (req, res) => controller.connect(req, res));
+router.post('/nova-conexao', authenticate, authorize('admin'), (req, res) => controller.novaConexao(req, res));
 router.post('/disconnect', authenticate, (req, res) => controller.disconnect(req, res));
 router.get('/qr', authenticate, (req, res) => controller.qr(req, res));
 router.get('/grupos-whatsapp', authenticate, (req, res) => controller.listarGruposWhatsApp(req, res));
