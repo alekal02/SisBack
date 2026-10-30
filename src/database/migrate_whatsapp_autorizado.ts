@@ -1,6 +1,11 @@
-import AppDataSource from './data-source';
+/**
+ * Pessoas autorizadas e tentativas sem autorização, no banco de controle.
+ * Uma função só: as duas tabelas não são criadas de novo em outro arquivo.
+ * arquivos_storage continua no banco ativo (por contrato), como já estava em produção.
+ */
+import AppDataSource, { getControlDataSource } from './data-source';
 
-const COMANDOS = [
+const TABELAS_CONTROLE = [
   `CREATE TABLE IF NOT EXISTS whatsapp_autorizado (
     id uuid PRIMARY KEY,
     contract_id uuid NOT NULL,
@@ -23,7 +28,9 @@ const COMANDOS = [
     criado_em timestamptz NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS whatsapp_tentativa_criado_idx ON whatsapp_tentativa_nao_autorizada (criado_em DESC)`,
-  `CREATE TABLE IF NOT EXISTS arquivos_storage (
+];
+
+const ARQUIVOS_STORAGE = `CREATE TABLE IF NOT EXISTS arquivos_storage (
     id uuid PRIMARY KEY,
     caminho varchar(1024) NOT NULL,
     content_type varchar(200),
@@ -31,11 +38,14 @@ const COMANDOS = [
     conteudo bytea NOT NULL,
     criado_em timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT arquivos_storage_caminho_uk UNIQUE (caminho)
-  )`,
-];
+  )`;
 
 export async function migrateWhatsappAutorizado(): Promise<void> {
+  const controle = getControlDataSource();
+  if (!controle.isInitialized) await controle.initialize();
+  for (const sql of TABELAS_CONTROLE) await controle.query(sql);
+
   if (!AppDataSource.isInitialized) await AppDataSource.initialize();
-  for (const sql of COMANDOS) await AppDataSource.query(sql);
+  await AppDataSource.query(ARQUIVOS_STORAGE);
   console.log('[whatsapp_autorizado] tabelas prontas');
 }

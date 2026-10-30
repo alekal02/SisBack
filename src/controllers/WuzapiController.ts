@@ -354,6 +354,7 @@ export class WuzapiController {
         servicoId: g.servicoId,
         servicoNome: g.servico?.nome || null,
         contratoNome: (g.servico as any)?.contract?.numeroContrato || null,
+        contractId: g.servico?.contract_id || null,
         ativo: g.ativo,
         estrategia: g.estrategia,
         responderPdf: g.responderPdf,

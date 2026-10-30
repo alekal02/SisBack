@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { ContractController } from '../controllers/ContractController';
+import { criarLoteHttp } from '../controllers/whatsappAgendaHttp';
 import { authenticate, authorize } from '../middlewares/authMiddleware';
 import { negarCriacaoContratoPreso, tenantGuard } from '../middlewares/tenantGuard';
 
@@ -26,5 +27,13 @@ router.put('/:id', authenticate, tenantGuard, (req, res) => controller.atualizar
 
 // Excluir contrato — apenas admin (ação destrutiva)
 router.delete('/:id', authenticate, tenantGuard, adminOnly, (req, res) => controller.excluir(req, res));
+
+router.post(
+  '/:id/whatsapp-autorizados/lote',
+  authenticate,
+  tenantGuard,
+  adminOnly,
+  (req, res) => criarLoteHttp(req, res),
+);
 
 export default router;

@@ -760,6 +760,35 @@ export class WuzapiService {
       throw this.erroMsg('Falha ao listar grupos do WhatsApp', error);
     }
   }
+
+  /** Sessão da instância própria. Sem token ou sem login: desconectada. Não registra o token. */
+  async sessaoDaInstancia(): Promise<{ logado: boolean; jidProprio: string }> {
+    const ativa = await this.repositorio.obterAtiva();
+    if (!ativa?.token) return { logado: false, jidProprio: '' };
+    try {
+      const sessao = await this.comToken(ativa.token, () => this.getStatus());
+      return {
+        logado: !!sessao.loggedIn,
+        jidProprio: String(sessao.jid || ''),
+      };
+    } catch {
+      return { logado: false, jidProprio: '' };
+    }
+  }
+
+  async baixarContatos(): Promise<unknown> {
+    const token = await this.exigirTokenProprio();
+    const { data } = await this.comToken(token, () => this.client.get('/user/contacts'));
+    return this.unwrap(data);
+  }
+
+  async baixarInfoGrupo(jid: string): Promise<unknown> {
+    const token = await this.exigirTokenProprio();
+    const { data } = await this.comToken(token, () => this.client.get('/group/info', {
+      params: { groupJID: jid },
+    }));
+    return this.unwrap(data);
+  }
 }
 
 const HOST_DOCKER_FIXO = /host\.docker\.internal|sistemma-backend/i;

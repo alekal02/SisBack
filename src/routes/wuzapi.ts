@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { WuzapiController } from '../controllers/WuzapiController';
+import { listarContatosHttp, listarParticipantesHttp } from '../controllers/whatsappAgendaHttp';
 import { authenticate, authorize } from '../middlewares/authMiddleware';
 
 const router = Router();
@@ -13,6 +14,10 @@ router.post('/connect', authenticate, (req, res) => controller.connect(req, res)
 router.post('/nova-conexao', authenticate, authorize('admin'), (req, res) => controller.novaConexao(req, res));
 router.post('/disconnect', authenticate, (req, res) => controller.disconnect(req, res));
 router.get('/qr', authenticate, (req, res) => controller.qr(req, res));
+const gestorOuAdmin = authorize('admin');
+
+router.get('/contatos', authenticate, gestorOuAdmin, (req, res) => listarContatosHttp(req, res));
+router.get('/grupos/:jid/participantes', authenticate, gestorOuAdmin, (req, res) => listarParticipantesHttp(req, res));
 router.get('/grupos-whatsapp', authenticate, (req, res) => controller.listarGruposWhatsApp(req, res));
 router.get('/recebimentos', authenticate, (req, res) => controller.recebimentos(req, res));
 router.get('/autorizados', authenticate, (req, res) => controller.listarAutorizados(req, res));
