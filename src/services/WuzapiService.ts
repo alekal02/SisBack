@@ -478,7 +478,12 @@ export class WuzapiService {
       const alerta = await this.confirmarWebhookSePossivel();
       let sessao = { connected: true, loggedIn: false, jid: '' };
       try {
-        sessao = await this.getStatus();
+        const lida = await this.getStatus();
+        sessao = {
+          connected: !!lida.connected,
+          loggedIn: !!lida.loggedIn,
+          jid: String(lida.jid || ''),
+        };
       } catch { /* o QR pode sair no passo seguinte */ }
       return this.resultado(
         gravada.nova.nomeInstancia,
@@ -561,7 +566,12 @@ export class WuzapiService {
       const alerta = await this.confirmarWebhookSePossivel();
       let sessao = { connected: true, loggedIn: false, jid: '' };
       try {
-        sessao = await this.getStatus();
+        const lida = await this.getStatus();
+        sessao = {
+          connected: !!lida.connected,
+          loggedIn: !!lida.loggedIn,
+          jid: String(lida.jid || ''),
+        };
       } catch { /* segue para o QR */ }
       return this.resultado(
         gravada.nova.nomeInstancia,

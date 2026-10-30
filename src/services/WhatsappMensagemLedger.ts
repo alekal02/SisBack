@@ -78,6 +78,16 @@ export function textoGrupoNaoConfigurado(): string {
   return '⚠️ Este grupo não está configurado no Sistemma. Mapeie o grupo em WhatsApp → Grupos e reenvie a planilha.';
 }
 
+/** Desligada por padrão. Só liga com a variável exatamente true. */
+export function respostaAutomaticaNaoAutorizadoLigada(): boolean {
+  return String(process.env.WUZAPI_RESPONDER_NAO_AUTORIZADO || '').trim() === 'true';
+}
+
+/** Desligado por padrão. Só liga com a variável exatamente true. */
+export function avisoGrupoNaoConfiguradoLigado(): boolean {
+  return String(process.env.WUZAPI_AVISAR_GRUPO || '').trim() === 'true';
+}
+
 export function textoFalhaImportacao(detalhe: string): string {
   const msg = String(detalhe || 'erro desconhecido').replace(/\s+/g, ' ').slice(0, 400);
   return `❌ Não foi possível importar a planilha: ${msg}`;
