@@ -832,6 +832,34 @@ async function gerarEEnviarEvolucaoDiaria(
   );
 }
 
+/** Contrato em que o menu foi aberto. Se a mensagem já veio desse contrato, usa o contexto atual. */
+async function contratoServicoDaSessao(
+  sessao: SessaoChat,
+  servico: Servico,
+  contrato: Contract | null,
+): Promise<{ servico: Servico; contrato: Contract | null }> {
+  if (
+    !sessao.contratoId
+    || servico.contract_id === sessao.contratoId
+    || contrato?.id === sessao.contratoId
+  ) {
+    return { servico, contrato };
+  }
+  const contratoSessao = await AppDataSource.getRepository(Contract).findOne({
+    where: { id: sessao.contratoId },
+  });
+  const servicoSessao = sessao.servicoId
+    ? await AppDataSource.getRepository(Servico).findOne({
+      where: { id: sessao.servicoId },
+      relations: ['contract'],
+    })
+    : null;
+  return {
+    servico: servicoSessao || servico,
+    contrato: contratoSessao || servicoSessao?.contract || contrato,
+  };
+}
+
 /**
  * Processa comando de texto. Retorna true se consumiu a mensagem.
  */
@@ -970,6 +998,17 @@ export async function processarComandoTextoWhatsapp(opts: {
     return { processado: true };
   }
 
+  if (ehPedidoSaude(norm)) {
+    sessoes.delete(opts.grupoJid);
+    try {
+      await gerarEEnviarSaude(opts.grupoJid, servico, contrato);
+    } catch (err: any) {
+      console.error('[WhatsappComandoRelatorio] saúde', err?.message || err);
+      await wuzapiService.enviarTexto(opts.grupoJid, '❌ Não consegui gerar a saúde dos dados.');
+    }
+    return { processado: true };
+  }
+
   if (sessao?.etapa === 'menu_servicos') {
     const itens = sessao.servicosMenu || [];
     const escolha = resolverEscolhasLista(norm, itens.length);
@@ -994,6 +1033,17 @@ export async function processarComandoTextoWhatsapp(opts: {
       await wuzapiService.enviarTexto(opts.grupoJid, TEXTO_LISTA_INVALIDA);
       return { processado: true };
     }
+    if (formato === 'saude') {
+      sessoes.delete(opts.grupoJid);
+      try {
+        const alvo = await contratoServicoDaSessao(sessao, servico, contrato);
+        await gerarEEnviarSaude(opts.grupoJid, alvo.servico, alvo.contrato);
+      } catch (err: any) {
+        console.error('[WhatsappComandoRelatorio] saúde', err?.message || err);
+        await wuzapiService.enviarTexto(opts.grupoJid, '❌ Não consegui gerar a saúde dos dados.');
+      }
+      return { processado: true };
+    }
     await pedirServicosOuEnviar({
       formato,
       tipoServico: sessao.tipoServico || null,
@@ -1002,17 +1052,6 @@ export async function processarComandoTextoWhatsapp(opts: {
       qualCiclo: pedidoLivre?.qualCiclo || sessao.qualCiclo || 'atual',
       abrirMenuTipo: false,
     }, norm);
-    return { processado: true };
-  }
-
-  if (ehPedidoSaude(norm)) {
-    sessoes.delete(opts.grupoJid);
-    try {
-      await gerarEEnviarSaude(opts.grupoJid, servico, contrato);
-    } catch (err: any) {
-      console.error('[WhatsappComandoRelatorio] saúde', err?.message || err);
-      await wuzapiService.enviarTexto(opts.grupoJid, '❌ Não consegui gerar a saúde dos dados.');
-    }
     return { processado: true };
   }
 
@@ -1055,13 +1094,15 @@ export async function processarComandoTextoWhatsapp(opts: {
   return { processado: false, motivo: 'Não é comando conhecido' };
 }
 
-function formatoDaOpcaoMenu(
+export function formatoDaOpcaoMenu(
   norm: string,
   pedido: PedidoRelatorioCurto | null,
-): FormatoRelatorioCurto | null {
-  if (norm === '1' || norm === 'dia' || norm === 'diario' || norm === 'diaria') return 'dia';
-  if (norm === '2' || norm === 'ciclo') return 'ciclo';
-  if (norm === '3' || norm === 'evolucao' || norm === 'grafico' || norm === 'graficos') return 'evolucao';
+): FormatoRelatorioCurto | 'saude' | null {
+  const t = normalizarTexto(norm);
+  if (t === '1' || t === 'dia' || t === 'diario' || t === 'diaria') return 'dia';
+  if (t === '2' || t === 'ciclo') return 'ciclo';
+  if (t === '3' || t === 'evolucao' || t === 'grafico' || t === 'graficos') return 'evolucao';
+  if (t === '4' || t === 'saude' || t === 'hodometro') return 'saude';
   if (pedido?.formato && !pedido.tipoServico && !pedido.todos) return pedido.formato;
   return null;
 }

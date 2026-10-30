@@ -22,6 +22,14 @@ import {
   TEXTO_EVOLUCAO_SO_COLETA,
   TEXTO_LISTA_INVALIDA,
 } from './WhatsappComandoRelatorioTexto';
+import { Contract } from '../entities/Contract';
+import { Servico } from '../entities/Servico';
+import {
+  formatoDaOpcaoMenu,
+  processarComandoTextoWhatsapp,
+  sessaoComandoAtiva,
+} from './WhatsappComandoRelatorioService';
+import wuzapiService from './WuzapiService';
 
 describe('WhatsApp — data no comando do dia', () => {
   it('lê 16/09, 16/09/2026 e ISO', () => {
@@ -136,7 +144,7 @@ describe('WhatsApp — ciclo anterior nos relatórios', () => {
 
 describe('WhatsApp — mensagens curtas do relatório', () => {
   it('menu de tipo e de serviço cabem em poucas linhas', () => {
-    assert.equal(textoMenuRelatorio(), 'Qual relatório?\n1 Dia · 2 Ciclo · 3 Evolução');
+    assert.equal(textoMenuRelatorio(), 'Qual relatório?\n1 Dia · 2 Ciclo · 3 Evolução · 4 Saúde');
     assert.equal(
       textoMenuServicos(['Coleta', 'Roçada', 'Varrição']),
       'Qual serviço?\n1 Coleta · 2 Roçada · 3 Varrição · 0 Todos\n(pode escolher vários: 1,3)',
@@ -144,7 +152,7 @@ describe('WhatsApp — mensagens curtas do relatório', () => {
     assert.equal(TEXTO_LISTA_INVALIDA, 'Responda com o número da lista.');
     assert.equal(TEXTO_EVOLUCAO_SO_COLETA, 'Evolução só está disponível para Coleta.');
     assert.equal(textoMenuRelatorio().includes('16/09'), false);
-    assert.equal(textoMenuRelatorio().includes('Saúde'), false);
+    assert.equal(textoMenuRelatorio().includes('4 Saúde'), true);
   });
 
   it('atalho completo não abre menu; relatório sozinho abre', () => {
@@ -174,10 +182,111 @@ describe('WhatsApp — mensagens curtas do relatório', () => {
     assert.equal(resolverEscolhasLista('coleta', 4), null);
   });
 
+  it('4, saude, saúde e hodometro escolhem Saúde', () => {
+    for (const texto of ['4', 'saude', 'saúde', 'hodometro']) {
+      assert.equal(formatoDaOpcaoMenu(texto, null), 'saude');
+    }
+    assert.equal(formatoDaOpcaoMenu('1', null), 'dia');
+    assert.equal(formatoDaOpcaoMenu('2', null), 'ciclo');
+    assert.equal(formatoDaOpcaoMenu('3', null), 'evolucao');
+  });
+
   it('legenda do PDF é uma linha', () => {
     assert.equal(
       legendaRelatorioPdf('Ciclo', 'Coleta', 'Aparecida', '2026-10-25', '2026-10-30'),
       'Ciclo · Coleta · Aparecida · 25/10 a 30/10',
     );
+  });
+});
+
+function respostaEhSaude(textos: string[], documentos: string[]): boolean {
+  if (documentos.some((nome) => /saude/i.test(nome))) return true;
+  return textos.some((texto) => /saúde dos dados|saude dos dados/i.test(texto));
+}
+
+describe('WhatsApp — saúde no menu e com o menu aberto', () => {
+  const servico = {
+    id: 'servico-saude',
+    contract_id: 'contrato-saude',
+    nome: 'Coleta',
+    tipo: 'coleta_caminhao',
+  } as Servico;
+  const contrato = {
+    id: 'contrato-saude',
+    numeroContrato: 'Aparecida',
+  } as Contract;
+  const jid = 'chat-saude-menu@s.whatsapp.net';
+  const textos: string[] = [];
+  const documentos: string[] = [];
+  const enviarTextoOriginal = wuzapiService.enviarTexto;
+  const enviarDocumentoOriginal = wuzapiService.enviarDocumento;
+  const urlOriginal = process.env.WUZAPI_URL;
+  const tokenOriginal = process.env.WUZAPI_TOKEN;
+
+  it('relatorio mostra a opção 4; 4 e saude com menu aberto geram a saúde', async () => {
+    process.env.WUZAPI_URL = 'http://127.0.0.1:9';
+    process.env.WUZAPI_TOKEN = 'token-teste';
+    wuzapiService.enviarTexto = async (_destino: string, body: string) => {
+      textos.push(body);
+      return {};
+    };
+    wuzapiService.enviarDocumento = async (_destino: string, nome: string) => {
+      documentos.push(nome);
+      return {};
+    };
+    try {
+      const menu = await processarComandoTextoWhatsapp({
+        grupoJid: jid,
+        texto: 'relatorio',
+        contextoContrato: { servico, contrato },
+      });
+      assert.equal(menu.processado, true);
+      assert.equal(textos.at(-1), textoMenuRelatorio());
+      assert.match(textos.at(-1) || '', /4 Saúde/);
+
+      textos.length = 0;
+      documentos.length = 0;
+      const quatro = await processarComandoTextoWhatsapp({
+        grupoJid: jid,
+        texto: '4',
+        contextoContrato: { servico, contrato },
+      });
+      assert.equal(quatro.processado, true);
+      assert.equal(sessaoComandoAtiva(jid), false);
+      assert.equal(respostaEhSaude(textos, documentos), true);
+      assert.equal(textos.some((texto) => texto === TEXTO_LISTA_INVALIDA), false);
+
+      await processarComandoTextoWhatsapp({
+        grupoJid: jid,
+        texto: 'relatorio',
+        contextoContrato: { servico, contrato },
+      });
+      assert.equal(sessaoComandoAtiva(jid), true);
+      textos.length = 0;
+      documentos.length = 0;
+      const atalho = await processarComandoTextoWhatsapp({
+        grupoJid: jid,
+        texto: 'saude',
+        contextoContrato: { servico, contrato },
+      });
+      assert.equal(atalho.processado, true);
+      assert.equal(sessaoComandoAtiva(jid), false);
+      assert.equal(respostaEhSaude(textos, documentos), true);
+      assert.equal(textos.some((texto) => texto.startsWith('Qual relatório?')), false);
+    } finally {
+      if (sessaoComandoAtiva(jid)) {
+        await processarComandoTextoWhatsapp({
+          grupoJid: jid,
+          texto: 'cancelar',
+          contextoContrato: { servico, contrato },
+        });
+      }
+      wuzapiService.enviarTexto = enviarTextoOriginal;
+      wuzapiService.enviarDocumento = enviarDocumentoOriginal;
+      if (urlOriginal === undefined) delete process.env.WUZAPI_URL;
+      else process.env.WUZAPI_URL = urlOriginal;
+      if (tokenOriginal === undefined) delete process.env.WUZAPI_TOKEN;
+      else process.env.WUZAPI_TOKEN = tokenOriginal;
+    }
   });
 });

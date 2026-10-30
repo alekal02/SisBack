@@ -244,7 +244,7 @@ export function legendaRelatorioPdf(
 }
 
 export function textoMenuRelatorio(): string {
-  return 'Qual relatório?\n1 Dia · 2 Ciclo · 3 Evolução';
+  return 'Qual relatório?\n1 Dia · 2 Ciclo · 3 Evolução · 4 Saúde';
 }
 
 export function textoMenuServicos(rotulos: string[]): string {

@@ -18,6 +18,7 @@ import {
   limparCotaRemetente,
   limparPendenciasWhatsapp,
   mensagemDeGrupo,
+  normalizarTextoWhatsapp,
   telefoneDeRespostaLid,
   textoEscolhaContrato,
   textoPlanilhaOutroContrato,
@@ -28,6 +29,7 @@ import {
   type ContratoAutorizadoWhatsapp,
   type PendenciaWhatsapp,
 } from './whatsappConversaPrivada';
+import { ehPedidoSaude, interpretarPedidoRelatorio } from './WhatsappComandoRelatorioTexto';
 
 const APARECIDA: ContratoAutorizadoWhatsapp = {
   contractId: 'c-aparecida',
@@ -178,6 +180,82 @@ describe('WhatsApp privado — autorização, contratos e planilha pendente', ()
     });
     assert.equal(negado.acao, 'contrato_nao_autorizado');
     assert.equal(citarContratoNoTexto('relatorio aparecida', [{ contractId: 'c-aparecida', nome: 'Aparecida' }])?.contractId, 'c-aparecida');
+  });
+
+  it('saude com o contrato citado gera a saúde dele; saude sozinho pergunta e a escolha não volta ao menu', () => {
+    const citado = decidir({
+      texto: 'saude aparecida',
+      textoMerece: true,
+      pessoas: [APARECIDA, CENTRO],
+    });
+    assert.equal(citado.acao, 'relatorio');
+    if (citado.acao === 'relatorio') {
+      assert.equal(citado.contractId, 'c-aparecida');
+      const texto = normalizarTextoWhatsapp(citado.texto);
+      assert.equal(ehPedidoSaude(texto), true);
+      assert.equal(interpretarPedidoRelatorio(texto), null);
+    }
+
+    const frase = decidir({
+      texto: 'relatorio aparecida saude',
+      textoMerece: true,
+      pessoas: [APARECIDA, CENTRO],
+    });
+    assert.equal(frase.acao, 'relatorio');
+    if (frase.acao === 'relatorio') {
+      assert.equal(frase.contractId, 'c-aparecida');
+      const texto = normalizarTextoWhatsapp(frase.texto);
+      assert.equal(ehPedidoSaude(texto), true);
+      assert.equal(interpretarPedidoRelatorio(texto), null);
+    }
+
+    const pergunta = decidir({ texto: 'saude', textoMerece: true, pessoas: [APARECIDA, CENTRO] });
+    assert.equal(pergunta.acao, 'perguntar_relatorio');
+    if (pergunta.acao !== 'perguntar_relatorio') return;
+    assert.equal(pergunta.texto, 'saude');
+
+    const agora = 2_000_000;
+    const escolha = decidir({
+      texto: '1',
+      textoMerece: true,
+      pessoas: [APARECIDA, CENTRO],
+      agora,
+      pendencia: {
+        tipo: 'relatorio',
+        expiraEm: agora + 60_000,
+        contratos: [
+          { contractId: 'c-aparecida', nome: 'Aparecida' },
+          { contractId: 'c-centro', nome: 'Centro' },
+        ],
+        texto: pergunta.texto,
+      },
+    });
+    assert.equal(escolha.acao, 'usar_relatorio_pendente');
+    if (escolha.acao === 'usar_relatorio_pendente') {
+      assert.equal(escolha.contractId, 'c-aparecida');
+      assert.equal(escolha.texto, 'saude');
+      assert.equal(ehPedidoSaude(normalizarTextoWhatsapp(escolha.texto)), true);
+      assert.equal(interpretarPedidoRelatorio(normalizarTextoWhatsapp(escolha.texto)), null);
+    }
+  });
+
+  it('sem permissão de pedir relatório, saude não recebe resposta', () => {
+    assert.equal(decidir({ texto: 'saude', textoMerece: true, pessoas: [SO_PLANILHA] }).acao, 'silencio');
+    assert.equal(
+      decidir({ texto: 'saude aparecida', textoMerece: true, pessoas: [SO_PLANILHA] }).acao,
+      'silencio',
+    );
+    assert.equal(
+      decidir({
+        texto: 'saude',
+        textoMerece: true,
+        pessoas: [
+          { ...APARECIDA, podePedirRelatorio: false },
+          { ...CENTRO, podePedirRelatorio: false },
+        ],
+      }).acao,
+      'silencio',
+    );
   });
 
   it('planilha pendente escolhe o número e, depois de 30 minutos, expira', () => {
