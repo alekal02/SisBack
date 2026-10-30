@@ -1,4 +1,4 @@
-import { In } from 'typeorm';
+import { In, type Repository } from 'typeorm';
 import { getControlDataSource, isMultiTenant } from '../database/data-source';
 import { WhatsappAutorizado } from '../entities/WhatsappAutorizado';
 import { WhatsappTentativaNaoAutorizada } from '../entities/WhatsappTentativaNaoAutorizada';
@@ -19,8 +19,29 @@ export class ErroWhatsappAutorizado extends Error {
   }
 }
 
-function repoAutorizado() {
+let repoAutorizadoTeste: Repository<WhatsappAutorizado> | null = null;
+
+/** Só o teste usa. O serviço volta ao banco de controle quando recebe null. */
+export function definirRepoAutorizadoParaTeste(repo: Repository<WhatsappAutorizado> | null): void {
+  repoAutorizadoTeste = repo;
+}
+
+function repoAutorizado(): Repository<WhatsappAutorizado> {
+  if (repoAutorizadoTeste) return repoAutorizadoTeste;
   return getControlDataSource().getRepository(WhatsappAutorizado);
+}
+
+/**
+ * O número e a forma irmã do celular brasileiro, com e sem o nono dígito.
+ * 556299998888 e 5562999998888 são a mesma pessoa.
+ */
+export function variantesTelefoneBr(telefone: string): string[] {
+  const d = String(telefone || '').replace(/\D/g, '');
+  const chaves = new Set<string>();
+  if (d) chaves.add(d);
+  if (/^55\d{2}9\d{8}$/.test(d)) chaves.add(d.slice(0, 4) + d.slice(5));
+  if (/^55\d{2}[6-9]\d{7}$/.test(d)) chaves.add(`${d.slice(0, 4)}9${d.slice(4)}`);
+  return [...chaves];
 }
 
 function repoTentativa() {
@@ -31,6 +52,10 @@ async function nomesDosContratos(ids: string[]): Promise<Map<string, string>> {
   const mapa = new Map<string, string>();
   const unicos = [...new Set(ids.filter(Boolean))];
   if (!unicos.length) return mapa;
+  if (repoAutorizadoTeste) {
+    for (const id of unicos) mapa.set(id, id);
+    return mapa;
+  }
   if (isMultiTenant()) {
     const tenants = await getControlDataSource().getRepository(Tenant).find({
       where: { contractId: In(unicos) },
@@ -75,7 +100,9 @@ export async function listarAutorizadosPorContrato(contractId: string) {
 }
 
 export async function pessoasAtivasPorTelefone(telefone: string): Promise<ContratoAutorizadoWhatsapp[]> {
-  const rows = await repoAutorizado().find({ where: { telefone, ativo: true } });
+  const variantes = variantesTelefoneBr(telefone);
+  if (!variantes.length) return [];
+  const rows = await repoAutorizado().find({ where: { telefone: In(variantes), ativo: true } });
   const nomes = await nomesDosContratos(rows.map((r) => r.contractId));
   return rows.map((r) => ({
     contractId: r.contractId,
@@ -88,19 +115,27 @@ export async function pessoasAtivasPorTelefone(telefone: string): Promise<Contra
 
 export async function telefoneDoLid(lid: string): Promise<string | null> {
   if (!lid) return null;
-  const row = await repoAutorizado().findOne({ where: { lid, ativo: true } });
-  return row?.telefone || null;
+  const direto = await repoAutorizado().findOne({ where: { lid, ativo: true } });
+  if (direto?.telefone) return direto.telefone;
+  const digitos = String(lid).replace(/\D/g, '');
+  if (!/^55\d{10,11}$/.test(digitos)) return null;
+  const variantes = variantesTelefoneBr(digitos);
+  const porTelefone = await repoAutorizado().findOne({
+    where: { telefone: In(variantes), ativo: true },
+  });
+  return porTelefone?.telefone || null;
 }
 
 export async function gravarLidNasPessoas(telefone: string, lid: string): Promise<void> {
   if (!telefone || !lid) return;
-  await getControlDataSource().query(
-    `UPDATE whatsapp_autorizado
-        SET lid = $1
-      WHERE telefone = $2
-        AND (lid IS NULL OR lid <> $1)`,
-    [lid, telefone],
-  );
+  const variantes = variantesTelefoneBr(telefone);
+  if (!variantes.length) return;
+  const rows = await repoAutorizado().find({ where: { telefone: In(variantes) } });
+  for (const row of rows) {
+    if (row.lid === lid) continue;
+    row.lid = lid;
+    await repoAutorizado().save(row);
+  }
 }
 
 export async function criarAutorizado(input: {

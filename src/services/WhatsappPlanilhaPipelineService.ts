@@ -50,6 +50,8 @@ import {
   MOTIVO_INTERROMPIDO,
   reservarMensagemWhatsapp,
   textoFalhaImportacao,
+  avisoGrupoNaoConfiguradoLigado,
+  respostaAutomaticaNaoAutorizadoLigada,
   textoGrupoNaoConfigurado,
 } from './WhatsappMensagemLedger';
 import { liberarTrabalhoPesado, ocuparTrabalhoPesado } from './trabalhoPesado';
@@ -791,6 +793,9 @@ export class WhatsappPlanilhaPipelineService {
         nomePerfil: ident.nomePerfil,
         tipo: decisao.tipo,
       });
+      if (respostaAutomaticaNaoAutorizadoLigada()) {
+        await avisarChatWhatsapp(chat, 'Este número não está autorizado a usar o chatbot.');
+      }
       return { status: 200, body: { sucesso: true, recebido: true, ignorado: 'nao_autorizado' }, continuar: null };
     }
     if (!acaoSegueProcessamento(decisao.acao)) {
@@ -905,6 +910,9 @@ export class WhatsappPlanilhaPipelineService {
         nomePerfil: ident.nomePerfil,
         tipo: decisao.tipo,
       });
+      if (respostaAutomaticaNaoAutorizadoLigada()) {
+        await avisarChatWhatsapp(chat, 'Este número não está autorizado a usar o chatbot.');
+      }
       return { processado: true, motivo: 'nao-autorizado' };
     }
     if (decisao.acao === 'planilha_expirada') {
@@ -1062,7 +1070,9 @@ export class WhatsappPlanilhaPipelineService {
         return resultado;
       }
       if (codigo === 'servico_nao_encontrado') {
-        await avisarGrupoWhatsapp(grupoJid, textoGrupoNaoConfigurado());
+        if (avisoGrupoNaoConfiguradoLigado()) {
+          await avisarGrupoWhatsapp(grupoJid, textoGrupoNaoConfigurado());
+        }
       } else if (codigo !== 'wuzapi_nao_configurada') {
         await avisarGrupoWhatsapp(grupoJid, textoFalhaImportacao(resultado.motivo || codigo));
       }
