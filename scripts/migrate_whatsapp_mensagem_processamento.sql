@@ -4,9 +4,11 @@
 -- da deduplicação persistente.
 --
 -- Não altera coleta_dados nem registros históricos.
+-- Se a tabela já existir sem default no id, o boot aplica
+-- ALTER COLUMN id SET DEFAULT gen_random_uuid().
 
 CREATE TABLE IF NOT EXISTS whatsapp_mensagem_processamento (
-  id uuid PRIMARY KEY,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "messageId" varchar(128) NOT NULL,
   "grupoJid" varchar(80),
   estado varchar(20) NOT NULL,
@@ -23,3 +25,5 @@ CREATE TABLE IF NOT EXISTS whatsapp_mensagem_processamento (
 
 CREATE INDEX IF NOT EXISTS idx_whatsapp_msg_estado_atualizado
   ON whatsapp_mensagem_processamento (estado, "atualizadoEm");
+
+ALTER TABLE whatsapp_mensagem_processamento ALTER COLUMN id SET DEFAULT gen_random_uuid();

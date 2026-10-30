@@ -5,6 +5,7 @@ import wuzapiService, { redigirSegredos } from '../services/WuzapiService';
 import {
   listarContatosAgenda,
   listarParticipantesAgenda,
+  mensagemErroLotePublica,
   redigirTelefones,
 } from '../services/whatsappAgendaContatos';
 import {
@@ -99,6 +100,6 @@ export async function criarLoteHttp(req: Request, res: Response): Promise<void> 
     res.status(resultado.status).json(resultado.body);
   } catch (error: unknown) {
     console.error(`[Wuzapi] ${redigirTelefones(redigirSegredos(error instanceof Error ? error.message : 'falha'))}`);
-    if (!res.headersSent) res.status(500).json({ error: 'Erro ao autorizar as pessoas' });
+    if (!res.headersSent) res.status(500).json({ error: mensagemErroLotePublica(error) });
   }
 }

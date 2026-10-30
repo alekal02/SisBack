@@ -387,6 +387,21 @@ export function separarLote(
   return { criar, ignorados };
 }
 
+export const MENSAGEM_LOTE_ID_VAZIO =
+  'Não foi possível autorizar as pessoas: o identificador do cadastro não foi gerado.';
+
+/** Texto para a tela. Tira SQL, parâmetros e telefone que tenham vindo do banco. */
+export function mensagemErroLotePublica(error: unknown): string {
+  const bruto = error instanceof Error ? error.message : '';
+  if (/null value in column ["']id["']/i.test(bruto)) return MENSAGEM_LOTE_ID_VAZIO;
+  const umaLinha = bruto.replace(/\s+/g, ' ').trim();
+  const temSql = /\b(insert|update|delete|select)\b/i.test(umaLinha)
+    || /query failed/i.test(umaLinha)
+    || /parameters:/i.test(umaLinha);
+  if (!temSql && umaLinha && umaLinha.length <= 180) return umaLinha;
+  return 'Não foi possível autorizar as pessoas.';
+}
+
 export async function executarLote(opts: {
   role?: string;
   contractIdUsuario?: string | null;
@@ -422,7 +437,7 @@ export async function executarLote(opts: {
         continue;
       }
       opts.log?.(redigirTelefones(`[Wuzapi] falha ao autorizar em lote: ${redigirTelefones(msg || 'falha')}`));
-      return { status: 500, body: { error: 'Erro ao autorizar as pessoas' } };
+      return { status: 500, body: { error: mensagemErroLotePublica(error) } };
     }
   }
   opts.log?.(redigirTelefones(linhaLogLote(criados.length, ignorados.length)));

@@ -1,20 +1,12 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
+import { SQL_CRIAR_ARQUIVOS_STORAGE, sqlAlterDefaultId } from '../uuidIdDefault';
 
 export class ArquivosStorage1762000000000 implements MigrationInterface {
   name = 'ArquivosStorage1762000000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`
-      CREATE TABLE IF NOT EXISTS arquivos_storage (
-        id uuid PRIMARY KEY,
-        caminho varchar(1024) NOT NULL,
-        content_type varchar(200),
-        tamanho integer NOT NULL,
-        conteudo bytea NOT NULL,
-        criado_em timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT arquivos_storage_caminho_uk UNIQUE (caminho)
-      )
-    `);
+    await queryRunner.query(SQL_CRIAR_ARQUIVOS_STORAGE);
+    await queryRunner.query(sqlAlterDefaultId('arquivos_storage'));
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
