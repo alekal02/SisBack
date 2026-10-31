@@ -89,6 +89,7 @@ import graficosPadraoRoutes from './routes/graficosPadrao';
 import wuzapiRoutes from './routes/wuzapi';
 import salaTecnicaRoutes from './routes/salaTecnica';
 import pdfRoutes from './routes/pdf';
+import painelRoutes from './routes/painel';
 import { DashboardExecutivoController } from './controllers/DashboardExecutivoController';
 import { registrarControllerExecutivo } from './services/executivoCacheWarmupService';
 
@@ -279,6 +280,7 @@ app.post('/api/qualidade-coleta/corrigir', authenticate, qMulter.single('planilh
 
 app.use('/api/coleta', coletaRoutes); // coleta já tem authenticate interno
 app.use('/api/contracts', contractsRoutes); // contratos (requer autenticação)
+app.use('/api/painel', painelRoutes);
 app.use('/api/contracts/:contractId/servicos', servicosRoutes); // serviços aninhados
 
 // Rotas de KPIs Universais

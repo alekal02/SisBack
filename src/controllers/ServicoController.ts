@@ -4145,6 +4145,8 @@ async getModeloExecutivo(req: Request, res: Response): Promise<any> {
 
       servico.configFaturamento = configFaturamento || {};
       await this.repository.save(servico);
+      const { invalidarCachePainel } = await import('../services/painelCache');
+      invalidarCachePainel();
 
       return res.json({
         message: 'Configuracao de faturamento salva com sucesso',

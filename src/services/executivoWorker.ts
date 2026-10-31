@@ -21,6 +21,12 @@ interface MensagemPdf {
   corpo: Record<string, unknown>;
 }
 
+interface MensagemPainel {
+  id: number;
+  tipo: 'painel';
+  contratoId?: string;
+}
+
 let bancoPronto: Promise<void> | null = null;
 let controller: DashboardExecutivoController | null = null;
 
@@ -110,11 +116,17 @@ async function pdf(msg: MensagemPdf): Promise<{ filename: string; buffer: Buffer
   return { filename, buffer };
 }
 
-parentPort?.on('message', (msg: MensagemExecutivo | MensagemPdf) => {
+parentPort?.on('message', (msg: MensagemExecutivo | MensagemPdf | MensagemPainel) => {
   console.log(`[ExecutivoWorker] recebeu ${msg.tipo}`);
   void (async () => {
     try {
       await prepararBanco();
+      if (msg.tipo === 'painel') {
+        const { calcularPainelDireto } = await import('./painelDiretoriaService');
+        const body = await calcularPainelDireto(msg.contratoId);
+        parentPort?.postMessage({ id: msg.id, ok: true, body });
+        return;
+      }
       if (msg.tipo === 'pdf') {
         const gerado = await pdf(msg);
         const pdfBytes = new Uint8Array(gerado.buffer);

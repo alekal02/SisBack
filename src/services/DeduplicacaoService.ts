@@ -35,6 +35,7 @@ import { recalcularTotaisDiasServicoSilencioso } from './coletaTotaisDiaService'
 import { invalidarCacheSaudeContratos } from '../controllers/ContractController';
 import { dashboardCache } from './DashboardCacheManager';
 import { agendarWarmupPosUpload } from './executivoCacheWarmupService';
+import { invalidarCachePainel } from './painelCache';
 import { normalizarTextoTipoCaminhao } from '../config/pesoMaximoCaminhao';
 import { numeroPlanilha } from './FormulaEngine';
 import { aplicarLimitesTextoColeta, textoMaisLongo, lerCampoDados } from '../utils/textoColunaColeta';
@@ -980,6 +981,7 @@ export class DeduplicacaoService {
       dashboardCache.invalidar(servicoId);
       agendarWarmupPosUpload(servicoId);
       invalidarCacheSaudeContratos();
+      invalidarCachePainel();
       void recalcularTotaisDiasServicoSilencioso(servicoId, this.extrairDatasIsoDasLinhas(linhas));
     }
 
@@ -1621,6 +1623,7 @@ export class DeduplicacaoService {
       dashboardCache.invalidar(servicoId);
       agendarWarmupPosUpload(servicoId);
       invalidarCacheSaudeContratos();
+      invalidarCachePainel();
       const datasRecalc = [...new Set([
         ...datasApagadas.map((d) => d.data),
         ...diasRemovidosAusentes.map((d) => d.data),

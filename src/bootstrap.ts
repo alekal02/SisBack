@@ -18,6 +18,7 @@ import { migrateImportacaoDiaHash } from './database/migrate_importacao_dia_hash
 import { migrateImportacaoLinhaIgnorada } from './database/migrate_importacao_linha_ignorada';
 import { migrateWhatsappInstancia } from './database/migrate_whatsapp_instancia';
 import { migrateExecutivoCache } from './database/migrate_executivo_cache';
+import { migratePainelDiretoria } from './database/migrate_painel_diretoria';
 import { sincronizarKpisUniversaisBiblioteca } from './database/sincronizarKpisUniversaisBiblioteca';
 import { iniciarAgendamentoWarmupExecutivo } from './services/executivoCacheWarmupService';
 import { recuperarMensagensWhatsappPendentes } from './services/WhatsappPlanilhaPipelineService';
@@ -102,6 +103,11 @@ export async function prepararBancoAtivo(): Promise<void> {
     await migrateExecutivoCache();
   } catch (err) {
     console.error('⚠️ Erro na migration de executivo_cache:', err);
+  }
+  try {
+    await migratePainelDiretoria();
+  } catch (err) {
+    console.error('⚠️ Erro na migration do painel da diretoria:', err);
   }
 
   const skipStartup = process.env.SKIP_STARTUP_SEED === 'true';

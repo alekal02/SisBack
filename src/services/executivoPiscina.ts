@@ -15,6 +15,11 @@ export interface PedidoPdf {
   corpo: Record<string, unknown>;
 }
 
+export interface PedidoPainel {
+  tipo: 'painel';
+  contratoId?: string;
+}
+
 export interface ResultadoPdf {
   buffer: Buffer;
   filename: string;
@@ -22,7 +27,7 @@ export interface ResultadoPdf {
 
 interface Job {
   id: number;
-  pedido: PedidoExecutivo | PedidoPdf;
+  pedido: PedidoExecutivo | PedidoPdf | PedidoPainel;
   resolve: (valor: unknown) => void;
   reject: (erro: Error) => void;
   encerrado: boolean;
@@ -111,18 +116,24 @@ function bombear(): void {
   emCurso.set(job.id, job);
   const mensagem = job.pedido.tipo === 'pdf'
     ? { id: job.id, tipo: 'pdf', corpo: job.pedido.corpo }
-    : {
-      id: job.id,
-      tipo: 'executivo',
-      consulta: job.pedido.consulta,
-      contratoId: job.pedido.contratoId,
-      ciclo: job.pedido.ciclo,
-      iniciadoEm: job.pedido.iniciadoEm,
-    };
+    : job.pedido.tipo === 'painel'
+      ? { id: job.id, tipo: 'painel', contratoId: job.pedido.contratoId }
+      : {
+        id: job.id,
+        tipo: 'executivo',
+        consulta: job.pedido.consulta,
+        contratoId: job.pedido.contratoId,
+        ciclo: job.pedido.ciclo,
+        iniciadoEm: job.pedido.iniciadoEm,
+      };
   garantirWorker().postMessage(mensagem);
 }
 
-function enfileirar(pedido: PedidoExecutivo | PedidoPdf): Promise<unknown> {
+export function workerExecutivoOcupado(): boolean {
+  return ocupado || fila.length > 0;
+}
+
+function enfileirar(pedido: PedidoExecutivo | PedidoPdf | PedidoPainel): Promise<unknown> {
   garantirWorker();
   const id = ++sequencia;
   return new Promise((resolve, reject) => {
@@ -156,4 +167,9 @@ export function calcularNoWorker(pedido: Omit<PedidoExecutivo, 'tipo'>): Promise
 
 export function gerarPdfNoWorker(corpo: Record<string, unknown>): Promise<ResultadoPdf> {
   return enfileirar({ tipo: 'pdf', corpo }) as Promise<ResultadoPdf>;
+}
+
+/** Painel da diretoria no mesmo worker, para não travar o /health. */
+export function calcularPainelNoWorker(contratoId?: string): Promise<unknown> {
+  return enfileirar({ tipo: 'painel', contratoId });
 }

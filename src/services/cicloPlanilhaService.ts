@@ -15,6 +15,7 @@ import {
 import { invalidarCacheDadosServico } from './servicoDadosCache';
 import { dashboardCache } from './DashboardCacheManager';
 import { agendarWarmupPosUpload } from './executivoCacheWarmupService';
+import { invalidarCachePainel } from './painelCache';
 import FileStorageService from './FileStorageService';
 import PlanilhaService from './PlanilhaService';
 import {
@@ -411,6 +412,7 @@ export async function fecharCicloServico(opts: {
   invalidarCacheDadosServico(servicoId);
   dashboardCache.invalidar(servicoId);
   agendarWarmupPosUpload(servicoId);
+  invalidarCachePainel();
 
   const backupPlanilha = await salvarUltimaPlanilhaNaPastaBackup({
     contract,
@@ -468,6 +470,7 @@ export async function reabrirCicloServico(opts: {
   invalidarCacheDadosServico(servicoId);
   dashboardCache.invalidar(servicoId);
   agendarWarmupPosUpload(servicoId);
+  invalidarCachePainel();
 
   return { ciclo: periodo, uploadIds };
 }

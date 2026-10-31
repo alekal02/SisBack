@@ -12,6 +12,7 @@ import { provisionarBancoContrato } from '../services/tenantDatabaseService';
 import { Contract } from '../entities/Contract';
 import { Servico } from '../entities/Servico';
 import { invalidarPdfCache } from '../services/PdfCacheManager';
+import { invalidarCachePainel } from '../services/painelCache';
 import PlanilhaService from '../services/PlanilhaService';
 import { normalizarDiaInicioCiclo } from '../utils/periodoCicloContrato';
 import { normalizarListaPlacasReserva } from '../utils/placasReserva';
@@ -263,6 +264,7 @@ export class ContractController {
       // Tarifa e limites do contrato entram em conta espalhada pelos serviços, e as
       // chaves de cache deles não carregam o id do contrato: zera tudo.
       limparCacheEndpoints();
+      invalidarCachePainel();
 
       const atualizado = await this.repository.findOne({ where: { id } });
       return res.json(atualizado || contract);

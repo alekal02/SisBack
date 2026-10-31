@@ -31,6 +31,12 @@ import { linhasFormulaPesoTotalVazia, montarConferencia } from './conferenciaImp
 import { MOTIVO_LINHA_IGNORADA } from './importacaoLinhaIgnorada';
 import { camposMetricaDeRegistro, metricaOficialServico } from '@sistemma/shared';
 import { calcularKpisAtivos } from './kpiCalculoServicoService';
+import {
+  comporFaturamentoColetaDeBrutos,
+  comporFaturamentoColetaDeRegistros,
+  producaoDeRegistros,
+  tarifaProducaoDe,
+} from './painelDiretoriaCalculo';
 
 const FIXTURES = path.join(__dirname, '..', '..', 'test', 'fixtures');
 
@@ -524,5 +530,72 @@ describe('planilhas reais Aparecida — mesmo caminho do upload', () => {
     assert.equal(tela.dashboard, 240.75);
     assert.equal(executivo, 240.75);
     assert.equal(tela.relatorio, 240.75);
+  });
+
+  it('painel: faturamento é a soma por tipo (t da planilha × R$/t) e coincide com executivo e coleta', () => {
+    const r = importarColetaComoUpload(coletaBuf);
+    const brutos = (PlanilhaService as unknown as {
+      converterColetasParaBrutos: (d: ColetaData[], apenasValidos: boolean) => Record<string, unknown>[];
+    }).converterColetasParaBrutos(r.importadas, true);
+    const valores = {
+      VALOR_TOCO: 240.19,
+      VALOR_TRUCK: 260.04,
+      VALOR_MINI: 265.47,
+      VALOR_BASCULANTE: 249.73,
+      VALOR_TONELADA: 240.19,
+    };
+    const id = 'painel-aparecida-coleta';
+    const painel = comporFaturamentoColetaDeBrutos(brutos, valores, id);
+    const tela = comporFaturamentoColetaDeRegistros(r.importadas, valores);
+    const exec = calcularMetricaExecutivaDeDados(brutos, valores, id);
+
+    const somaTipos = round2(painel.porTipo.reduce((s, p) => s + (p.reais || 0), 0));
+    assert.equal(painel.faturamento, somaTipos);
+    assert.equal(painel.toneladas, 11069.39);
+    assert.equal(tela.toneladas, 11069.39);
+    assert.equal(painel.faturamento, exec.faturamento);
+    assert.equal(tela.faturamento, exec.faturamento);
+
+    const semPreco = comporFaturamentoColetaDeBrutos(brutos, {}, `${id}-sem`);
+    assert.equal(semPreco.faturamento, null);
+    const execSemPreco = calcularMetricaExecutivaDeDados(brutos, {}, `${id}-sem`);
+    assert.ok(execSemPreco.faturamento > 0);
+    assert.notEqual(semPreco.faturamento ?? 0, execSemPreco.faturamento);
+  });
+
+  it('painel: produção é o total da planilha e tarifa vazia não vira R$ 80', () => {
+    const r = importarProducaoComoUpload(producaoBuf, 25);
+    const alvos = [
+      { nome: 'Roçada Mecanizada', tipo: 'rocadeira', campo: 'areaM2' as const },
+      { nome: 'Roçada Manual', tipo: 'rocadeira', campo: 'areaM2' as const },
+      { nome: 'Varrição Manual', tipo: 'varricao', campo: 'km' as const },
+      { nome: 'Varrição Mecanizada', tipo: 'varricao', campo: 'km' as const },
+    ];
+    for (const alvo of alvos) {
+      const rows = r.coletasPorServico.get(alvo.nome) || [];
+      const esperado = r.porServico.get(alvo.nome);
+      const prod = producaoDeRegistros(
+        alvo.tipo,
+        rows.map((c) => (c.dados || {}) as Record<string, unknown>),
+      );
+      const referencia = round2(Number(esperado?.[alvo.campo]) || 0);
+      assert.equal(prod.quantidade, referencia, alvo.nome);
+      assert.equal(tarifaProducaoDe(alvo.tipo, alvo.nome, { ativo: true }), null);
+    }
+    const rows = r.coletasPorServico.get('Roçada Mecanizada') || [];
+    const prod = producaoDeRegistros(
+      'rocadeira',
+      rows.map((c) => (c.dados || {}) as Record<string, unknown>),
+    );
+    const tarifa = tarifaProducaoDe('rocadeira', 'Roçada Mecanizada', {
+      ativo: true,
+      valorM2Mecanizada: 0.15,
+    });
+    assert.equal(tarifa, 0.15);
+    assert.equal(round2(prod.quantidade * tarifa), round2(2657770.71 * 0.15));
+    assert.equal(
+      tarifaProducaoDe('rocadeira', 'Roçada Mecanizada', null),
+      null,
+    );
   });
 });
